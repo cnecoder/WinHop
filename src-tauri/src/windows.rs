@@ -366,13 +366,15 @@ pub fn capture_window(hwnd: isize, max_w: u32, max_h: u32) -> Option<Vec<u8>> {
         let screen = GetDC(std::ptr::null_mut());
         let mem = CreateCompatibleDC(screen);
         let bmp = CreateCompatibleBitmap(screen, tw, th);
-        ReleaseDC(std::ptr::null_mut(), screen);
         if mem.is_null() || bmp.is_null() {
+            ReleaseDC(std::ptr::null_mut(), screen);
             return None;
         }
         let _old = SelectObject(mem, bmp);
 
+        // 屏幕 DC 必须在本 BitBlt 之后才释放
         let ok = BitBlt(mem, 0, 0, tw, th, screen, rect.left, rect.top, SRCCOPY);
+        ReleaseDC(std::ptr::null_mut(), screen);
         if ok == 0 {
             DeleteObject(bmp);
             DeleteDC(mem);
