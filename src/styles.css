@@ -1,9 +1,9 @@
 :root {
-  --bg: rgba(18, 18, 22, 0.86);
-  --fg: #e8e8ec;
-  --dim: #8a8a92;
-  --accent: #4cc2ff;
-  --off: #55555c;
+  --bg: rgba(15, 17, 23, 0.2);
+  --fg: #e6e9f2;
+  --dim: #9aa3b5;
+  --accent: #7aa2f7;
+  --off: #5c6474;
 }
 
 * {
@@ -23,11 +23,17 @@ body {
 
 #app {
   display: none;
+  width: 100vw;
+  height: 100vh;
+  box-sizing: border-box;
   background: var(--bg);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 12px;
-  padding: 18px 22px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  padding: 24px 36px;
+}
+
+#header,
+#list {
+  max-width: 1200px;
+  margin: 0 auto;
 }
 
 #header {
@@ -122,7 +128,7 @@ body {
 }
 
 .row.active {
-  background: rgba(76, 194, 255, 0.16);
+  background: rgba(122, 162, 247, 0.16);
   outline: 1px solid var(--accent);
 }
 
@@ -305,7 +311,7 @@ body {
 }
 
 .wrow.active {
-  background: rgba(76, 194, 255, 0.16);
+  background: rgba(122, 162, 247, 0.16);
   outline: 1px solid var(--accent);
 }
 
