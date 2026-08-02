@@ -7,6 +7,7 @@ const listEl = document.getElementById("list");
 const settingsEl = document.getElementById("settings");
 
 let settingsOpen = false;
+let state = null;
 
 function escapeHtml(s) {
   return s.replace(
@@ -55,6 +56,17 @@ document.getElementById("settings-btn").addEventListener("click", () => {
   settingsEl.hidden = !settingsOpen;
 });
 
+// 鼠标点击选择：复用键盘路径——程序层按字母、窗口层按编号
+listEl.addEventListener("click", (e) => {
+  const row = e.target.closest(".row");
+  if (!row) return;
+  if (state && state.phase === "windows" && row.dataset.idx) {
+    invoke("key", { k: "digit:" + row.dataset.idx });
+  } else if (state && state.phase === "programs" && row.dataset.key) {
+    invoke("key", { k: "letter:" + row.dataset.key });
+  }
+});
+
 document.querySelectorAll('input[name="order"]').forEach((r) => {
   r.addEventListener("change", () => {
     if (r.checked) {
@@ -69,21 +81,22 @@ document.getElementById("quit-btn").addEventListener("click", () => {
   invoke("quit_app");
 });
 
-function render(state) {
-  if (!state.visible) {
+function render(s) {
+  state = s;
+  if (!s.visible) {
     appEl.style.display = "none";
     settingsOpen = false;
     settingsEl.hidden = true;
     return;
   }
   appEl.style.display = "block";
-  renderSettings(state);
-  if (state.phase === "windows") {
-    titleEl.textContent = state.title;
-    listEl.innerHTML = state.windows
+  renderSettings(s);
+  if (s.phase === "windows") {
+    titleEl.textContent = s.title;
+    listEl.innerHTML = s.windows
       .map(
         (w) =>
-          `<div class="row${w.active ? " active" : ""}">` +
+          `<div class="row${w.active ? " active" : ""}" data-idx="${w.index}">` +
           `<span class="key">${w.index}</span>` +
           `<span class="name">${escapeHtml(w.title)}</span>` +
           `<span class="screen">屏${w.screen + 1}</span>` +
@@ -92,10 +105,10 @@ function render(state) {
       .join("");
   } else {
     titleEl.textContent = "WinTab";
-    listEl.innerHTML = state.programs
+    listEl.innerHTML = s.programs
       .map(
         (p) =>
-          `<div class="row${p.active ? " active" : ""}${p.running ? "" : " off"}">` +
+          `<div class="row${p.active ? " active" : ""}${p.running ? "" : " off"}" data-key="${p.key}">` +
           `<span class="key">${p.key}</span>` +
           `<span class="name">${escapeHtml(p.name)}</span>` +
           `<span class="screen">${p.running ? "×" + p.count : "未运行"}</span>` +
