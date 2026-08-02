@@ -1,0 +1,102 @@
+:root {
+  --bg: rgba(18, 18, 22, 0.86);
+  --fg: #e8e8ec;
+  --dim: #8a8a92;
+  --accent: #4cc2ff;
+  --off: #55555c;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  user-select: none;
+}
+
+html,
+body {
+  background: transparent;
+  font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+  color: var(--fg);
+  overflow: hidden;
+}
+
+#app {
+  display: none;
+  background: var(--bg);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 18px 22px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+
+#header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+#title {
+  font-size: 18px;
+  font-weight: 600;
+}
+
+#hint {
+  font-size: 12px;
+  color: var(--dim);
+}
+
+#list {
+  padding-top: 10px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  font-size: 15px;
+}
+
+.row.active {
+  background: rgba(76, 194, 255, 0.16);
+  outline: 1px solid var(--accent);
+}
+
+.key {
+  width: 26px;
+  text-align: center;
+  font-family: Consolas, monospace;
+  font-weight: 700;
+  font-size: 16px;
+  color: var(--accent);
+  border: 1px solid rgba(76, 194, 255, 0.4);
+  border-radius: 5px;
+  padding: 1px 0;
+}
+
+.name {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.screen {
+  font-size: 12px;
+  color: var(--dim);
+  font-family: Consolas, monospace;
+}
+
+.row.off .key {
+  color: var(--off);
+  border-color: var(--off);
+}
+
+.row.off .name,
+.row.off .screen {
+  color: var(--off);
+}

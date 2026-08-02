@@ -1,0 +1,565 @@
+mod config;
+mod windows;
+
+use std::collections::{HashMap, HashSet};
+use std::str::FromStr;
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use config::Config;
+use serde::Serialize;
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{TrayIconBuilder, TrayIconEvent};
+use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, WindowEvent};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
+use windows::{HookMsg, WinInfo};
+
+#[derive(PartialEq, Clone, Copy, Debug)]
+enum Phase {
+    Closed,
+    Programs,
+    Windows,
+}
+
+#[derive(Clone)]
+struct ProgEntry {
+    key: String,
+    name: String,
+    process: String,
+}
+
+struct OverlayState {
+    phase: Phase,
+    prog_list: Vec<ProgEntry>,
+    wins_by_proc: HashMap<String, Vec<WinInfo>>,
+    prog_sel: usize,
+    sel_proc: Option<String>,
+    wins: Vec<WinInfo>,
+    active: usize,
+    last_activated: isize,
+    digit_buf: String,
+    switched: bool,
+}
+
+impl Default for OverlayState {
+    fn default() -> Self {
+        Self {
+            phase: Phase::Closed,
+            prog_list: Vec::new(),
+            wins_by_proc: HashMap::new(),
+            prog_sel: 0,
+            sel_proc: None,
+            wins: Vec::new(),
+            active: 0,
+            last_activated: 0,
+            digit_buf: String::new(),
+            switched: false,
+        }
+    }
+}
+
+struct Inner {
+    cfg: Config,
+    visible: Arc<AtomicBool>,
+    overlay: Mutex<OverlayState>,
+    prev_fg: AtomicIsize,
+    pending_activate: AtomicIsize,
+}
+
+#[derive(Serialize, Clone)]
+struct ProgramUi {
+    key: String,
+    name: String,
+    running: bool,
+    count: usize,
+    active: bool,
+}
+
+#[derive(Serialize, Clone)]
+struct WindowUi {
+    index: usize,
+    title: String,
+    screen: u32,
+    active: bool,
+}
+
+#[derive(Serialize, Clone)]
+struct Render {
+    visible: bool,
+    phase: String,
+    title: String,
+    programs: Vec<ProgramUi>,
+    windows: Vec<WindowUi>,
+}
+
+fn emit(app: &AppHandle, inner: &Inner, ov: &OverlayState) {
+    let visible = inner.visible.load(Ordering::Relaxed);
+    let mut render = Render {
+        visible,
+        phase: "programs".into(),
+        title: String::new(),
+        programs: Vec::new(),
+        windows: Vec::new(),
+    };
+    if ov.phase == Phase::Windows {
+        render.phase = "windows".into();
+        if let Some(proc) = &ov.sel_proc {
+            let entry = ov
+                .prog_list
+                .iter()
+                .find(|e| &e.process == proc)
+                .or_else(|| ov.prog_list.first());
+            if let Some(e) = entry {
+                render.title = e.name.clone();
+            }
+            for (i, w) in ov.wins.iter().enumerate() {
+                render.windows.push(WindowUi {
+                    index: i + 1,
+                    title: w.title.clone(),
+                    screen: w.monitor,
+                    active: i == ov.active,
+                });
+            }
+        }
+    }
+    for (i, p) in ov.prog_list.iter().enumerate() {
+        let count = ov
+            .wins_by_proc
+            .get(&p.process)
+            .map(|w| w.len())
+            .unwrap_or(0);
+        render.programs.push(ProgramUi {
+            key: p.key.clone(),
+            name: p.name.clone(),
+            running: count > 0,
+            count,
+            active: i == ov.prog_sel,
+        });
+    }
+    let _ = app.emit("overlay", &render);
+}
+
+// 已配置程序在前（保持配置字母），未配置的运行中程序按进程名排序补全（取空闲字母）
+fn build_prog_list(cfg: &Config, wins_by_proc: &HashMap<String, Vec<WinInfo>>) -> Vec<ProgEntry> {
+    let mut list: Vec<ProgEntry> = Vec::new();
+    let mut used: HashSet<String> = HashSet::new();
+    for p in &cfg.programs {
+        used.insert(p.key.clone());
+        list.push(ProgEntry {
+            key: p.key.clone(),
+            name: p.name.clone(),
+            process: p.process.clone(),
+        });
+    }
+    let mut autos: Vec<&String> = wins_by_proc
+        .keys()
+        .filter(|proc| !cfg.programs.iter().any(|p| &p.process == *proc))
+        .collect();
+    autos.sort();
+    for proc in autos {
+        let letter = ('a'..='z').find(|c| !used.contains(&c.to_string()));
+        if let Some(l) = letter {
+            used.insert(l.to_string());
+            let name = proc.trim_end_matches(".exe").to_string();
+            list.push(ProgEntry {
+                key: l.to_string(),
+                name,
+                process: proc.clone(),
+            });
+        } else {
+            break; // 字母耗尽，不再补全
+        }
+    }
+    list
+}
+
+fn open(app: &AppHandle) {
+    let inner = app.state::<Inner>();
+    if inner.visible.load(Ordering::Relaxed) {
+        return;
+    }
+    let mut all: Vec<WinInfo> = windows::enum_windows();
+    let mut wins_by_proc: HashMap<String, Vec<WinInfo>> = HashMap::new();
+    for w in all.drain(..) {
+        wins_by_proc.entry(w.process.clone()).or_default().push(w);
+    }
+    let mut ov = inner.overlay.lock().unwrap();
+    ov.phase = Phase::Programs;
+    ov.prog_list = build_prog_list(&inner.cfg, &wins_by_proc);
+    ov.wins_by_proc = wins_by_proc;
+    ov.prog_sel = 0;
+    ov.sel_proc = None;
+    ov.wins.clear();
+    ov.digit_buf.clear();
+    ov.switched = false;
+    ov.last_activated = 0;
+    inner.prev_fg.store(windows::foreground(), Ordering::Relaxed);
+    inner.visible.store(true, Ordering::Relaxed);
+    eprintln!(
+        "[t={}] overlay open ({} programs)",
+        windows::now_ms(),
+        ov.prog_list.len()
+    );
+    if let Some(win) = app.get_webview_window("main") {
+        if let Ok(Some(mon)) = win.primary_monitor() {
+            let pos = mon.position();
+            let size = mon.size();
+            let ws = win.outer_size().unwrap_or(tauri::PhysicalSize::new(720, 520));
+            let x = (pos.x + (size.width as i32 - ws.width as i32) / 2).max(0);
+            let y = (pos.y + (size.height as i32 - ws.height as i32) / 2).max(0);
+            let _ = win.set_position(PhysicalPosition::new(x, y));
+        }
+        let _ = win.show();
+        // 覆盖层必须夺焦：否则前台是 Chromium 时按键走 raw input，谁也收不到。
+        // 夺焦后按键落在覆盖层自己的 webview，由 JS keydown 接收（本窗口内部 raw input 可达）。
+        let _ = win.set_focus();
+        if let Ok(hwnd) = win.hwnd() {
+            windows::set_overlay_hwnd(hwnd.0 as isize);
+        }
+    }
+    emit(app, &inner, &ov);
+}
+
+fn close(app: &AppHandle) {
+    let inner = app.state::<Inner>();
+    if !inner.visible.load(Ordering::Relaxed) {
+        eprintln!("[wintab] close 被跳过（已关闭）");
+        return;
+    }
+    let ov = inner.overlay.lock().unwrap();
+    inner.visible.store(false, Ordering::Relaxed);
+    eprintln!("[t={}] overlay close (switched={})", windows::now_ms(), ov.switched);
+    let switched = ov.switched;
+    drop(ov);
+    windows::set_overlay_hwnd(0);
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.hide();
+    }
+    // 激活延迟到事件循环处理（run_on_main_thread）：
+    // 1) 覆盖层隐藏、钩子放行后 Alt 注入才不被吞
+    // 2) SendInput 绝不能在钩子回调上下文执行（会自我死锁）
+    let pending = inner.pending_activate.swap(0, Ordering::Relaxed);
+    if pending != 0 {
+        let app2 = app.clone();
+        let _ = app2.run_on_main_thread(move || windows::activate_with_retry(pending));
+    } else if !switched {
+        let prev = inner.prev_fg.load(Ordering::Relaxed);
+        if prev != 0 {
+            let app2 = app.clone();
+            let _ = app2.run_on_main_thread(move || windows::activate_with_retry(prev));
+        }
+    }
+    let render = Render {
+        visible: false,
+        phase: "programs".into(),
+        title: String::new(),
+        programs: Vec::new(),
+        windows: Vec::new(),
+    };
+    let _ = app.emit("overlay", &render);
+}
+
+// 激活操作延迟到钩子回调之外执行：回调内严禁阻塞（超时会被 Windows 静默卸载钩子）
+fn deferred_activate(app: &AppHandle, hwnd: isize) {
+    let app = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let _ = windows::activate(hwnd);
+    });
+}
+
+// 选中程序层条目：单窗口直切返回 true（调用方负责解锁并 close），多窗口进窗口层，
+// 窗口层中重复选中同一程序则轮询切下一窗口
+fn select_entry(app: &AppHandle, inner: &Inner, ov: &mut OverlayState, entry: &ProgEntry) -> bool {
+    let wins = match ov.wins_by_proc.get(&entry.process) {
+        Some(w) if !w.is_empty() => w,
+        _ => {
+            eprintln!("[wintab] '{}' 无窗口", entry.name);
+            return false;
+        }
+    };
+    if ov.phase == Phase::Windows && ov.sel_proc.as_deref() == Some(entry.process.as_str()) {
+        ov.active = (ov.active + 1) % wins.len();
+        ov.last_activated = wins[ov.active].hwnd;
+        deferred_activate(app, wins[ov.active].hwnd);
+        eprintln!("[wintab] 轮询 {} 窗口 {}", entry.name, ov.active + 1);
+        emit(app, inner, ov);
+        return false;
+    }
+    if wins.len() == 1 {
+        ov.switched = true;
+        ov.last_activated = wins[0].hwnd;
+        inner.pending_activate.store(wins[0].hwnd, Ordering::Relaxed);
+        true
+    } else {
+        ov.phase = Phase::Windows;
+        ov.sel_proc = Some(entry.process.clone());
+        ov.wins = wins.clone();
+        ov.active = 0;
+        ov.digit_buf.clear();
+        eprintln!("[wintab] '{}' -> {} 窗口数 {}", entry.key, entry.name, wins.len());
+        emit(app, inner, ov);
+        false
+    }
+}
+
+fn select_by_letter(app: &AppHandle, inner: &Inner, ov: &mut OverlayState, c: char) -> bool {
+    let Some(entry) = ov.prog_list.iter().find(|e| e.key == c.to_string()).cloned() else {
+        eprintln!("[wintab] letter '{}' 无对应程序", c);
+        return false;
+    };
+    select_entry(app, inner, ov, &entry)
+}
+
+fn resolve_window(inner: &Inner, ov: &mut OverlayState, n: usize) -> bool {
+    let total = ov.wins.len();
+    if total == 0 || n < 1 {
+        return false;
+    }
+    let idx = (n - 1).min(total - 1);
+    ov.switched = true;
+    ov.last_activated = ov.wins[idx].hwnd;
+    inner.pending_activate.store(ov.wins[idx].hwnd, Ordering::Relaxed);
+    eprintln!("[wintab] 切换到窗口 {}", idx + 1);
+    true
+}
+
+static LAST_KEY_MS: AtomicU64 = AtomicU64::new(0);
+
+// webview JS keydown → 状态机。覆盖层夺焦后按键落在覆盖层内部，走这条路径
+#[tauri::command]
+fn key(app: AppHandle, k: String) {
+    let msg = match k.as_str() {
+        "esc" => HookMsg::Esc,
+        "up" => HookMsg::Up,
+        "down" => HookMsg::Down,
+        "enter" => HookMsg::Enter,
+        "hotkey" => HookMsg::Hotkey,
+        s if s.starts_with("letter:") => {
+            HookMsg::Letter(s[7..].chars().next().unwrap_or(' '))
+        }
+        s if s.starts_with("digit:") => HookMsg::Digit(s[6..].chars().next().unwrap_or('0')),
+        _ => return,
+    };
+    handle_key(&app, msg);
+}
+
+fn handle_key(app: &AppHandle, msg: HookMsg) {
+    LAST_KEY_MS.store(windows::now_ms(), Ordering::Relaxed);
+    let inner = app.state::<Inner>();
+    match msg {
+        HookMsg::Hotkey => {
+            if inner.visible.load(Ordering::Relaxed) {
+                close(app);
+            } else {
+                open(app);
+            }
+            return;
+        }
+        _ => {}
+    }
+    if !inner.visible.load(Ordering::Relaxed) {
+        return;
+    }
+    let mut ov = inner.overlay.lock().unwrap();
+    eprintln!("[t={}] key {:?} phase={:?}", windows::now_ms(), msg, ov.phase);
+    match msg {
+        HookMsg::ClickOutside => {
+            drop(ov);
+            close(app);
+        }
+        HookMsg::Esc => match ov.phase {
+            Phase::Windows => {
+                ov.phase = Phase::Programs;
+                ov.sel_proc = None;
+                ov.digit_buf.clear();
+                emit(app, &inner, &ov);
+            }
+            Phase::Programs => {
+                drop(ov);
+                close(app);
+            }
+            Phase::Closed => {}
+        },
+        HookMsg::Letter(c) => {
+            if select_by_letter(app, &inner, &mut ov, c) {
+                drop(ov);
+                close(app);
+            }
+        }
+        HookMsg::Digit(d) => {
+            if ov.phase != Phase::Windows || ov.wins.is_empty() {
+                return;
+            }
+            ov.digit_buf.push(d);
+            if let Ok(n) = ov.digit_buf.parse::<usize>() {
+                let total = ov.wins.len();
+                // n*10 > total：再加任何一位都会超过总数，此刻立即兑现
+                if n >= 1 && n * 10 > total && resolve_window(&inner, &mut ov, n) {
+                    drop(ov);
+                    close(app);
+                }
+            }
+        }
+        HookMsg::Hotkey => {}
+        HookMsg::Up | HookMsg::Down => {
+            let delta: isize = if matches!(msg, HookMsg::Up) { -1 } else { 1 };
+            match ov.phase {
+                Phase::Programs if !ov.prog_list.is_empty() => {
+                    let len = ov.prog_list.len() as isize;
+                    ov.prog_sel = ((ov.prog_sel as isize + delta + len) % len) as usize;
+                    emit(app, &inner, &ov);
+                }
+                Phase::Windows if !ov.wins.is_empty() => {
+                    let len = ov.wins.len() as isize;
+                    ov.active = ((ov.active as isize + delta + len) % len) as usize;
+                    emit(app, &inner, &ov);
+                }
+                _ => {}
+            }
+        }
+        HookMsg::Enter => {
+            let done = match ov.phase {
+                Phase::Programs => {
+                    if ov.prog_list.is_empty() {
+                        false
+                    } else {
+                        let idx = ov.prog_sel.min(ov.prog_list.len() - 1);
+                        let entry = ov.prog_list[idx].clone();
+                        select_entry(app, &inner, &mut ov, &entry)
+                    }
+                }
+                Phase::Windows => {
+                    let n = ov.active + 1;
+                    resolve_window(&inner, &mut ov, n)
+                }
+                Phase::Closed => false,
+            };
+            if done {
+                drop(ov);
+                close(app);
+            }
+        }
+    }
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    windows::redirect_stderr_to_file();
+    eprintln!("=== wintab start ===");
+    let cfg = config::load();
+    // taskmgr 等管理员程序需要提权才能钩子生效/激活；debug 构建跳过（dev 迭代不弹 UAC）
+    if cfg.elevate && !cfg!(debug_assertions) && !windows::is_elevated() {
+        windows::relaunch_elevated();
+        return;
+    }
+    if !windows::acquire_single_instance() {
+        eprintln!("[wintab] 已有实例在运行，退出");
+        return;
+    }
+    let shortcut = Shortcut::from_str(&cfg.hotkey)
+        .unwrap_or_else(|e| panic!("配置热键「{}」无效: {}", cfg.hotkey, e));
+    tauri::Builder::default()
+        .plugin(
+            // RegisterHotKey 系统级热键：Chromium 前台（raw input）时 LL 键盘钩子失效，
+            // 但 RegisterHotKey 与前台无关，始终生效
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, _shortcut, event| {
+                    if event.state() == ShortcutState::Pressed {
+                        let inner = app.state::<Inner>();
+                        if inner.visible.load(Ordering::Relaxed) {
+                            close(app);
+                        } else {
+                            open(app);
+                        }
+                    }
+                })
+                .build(),
+        )
+        .invoke_handler(tauri::generate_handler![key])
+        .setup(move |app| {
+            let visible = Arc::new(AtomicBool::new(false));
+            app.manage(Inner {
+                cfg,
+                visible: visible.clone(),
+                overlay: Mutex::new(OverlayState::default()),
+                prev_fg: AtomicIsize::new(0),
+                pending_activate: AtomicIsize::new(0),
+            });
+            let handle = app.handle().clone();
+            // 鼠标钩子（点击外部关闭）；键盘走 RegisterHotKey + webview JS keydown
+            windows::install_mouse_hook(visible, Box::new(move |msg| handle_key(&handle, msg)));
+            app.global_shortcut().register(shortcut)?;
+            // 健康看门狗：检测隐形覆盖层（visible=true 但窗口不可见）与空闲卡死，
+            // 自动强制关闭并留日志，避免「无响应吞键」状态持续
+            let health_handle = app.handle().clone();
+            std::thread::spawn(move || loop {
+                std::thread::sleep(Duration::from_secs(2));
+                let inner = health_handle.state::<Inner>();
+                if !inner.visible.load(Ordering::Relaxed) {
+                    continue;
+                }
+                let hwnd = windows::get_overlay_hwnd();
+                if hwnd != 0 && !windows::overlay_visible(hwnd) {
+                    eprintln!(
+                        "[t={}] 分叉检测：visible=true 但窗口不可见，强制关闭",
+                        windows::now_ms()
+                    );
+                    close(&health_handle);
+                    continue;
+                }
+                let idle = windows::now_ms().saturating_sub(LAST_KEY_MS.load(Ordering::Relaxed));
+                if idle > 20_000 {
+                    eprintln!(
+                        "[t={}] 空闲 {}ms 无按键，疑似卡死，强制关闭",
+                        windows::now_ms(),
+                        idle
+                    );
+                    close(&health_handle);
+                }
+            });
+            // 托盘：鼠标路径不受任何键盘钩子影响，保证 taskmgr 等场景下仍可唤出
+            let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&quit])?;
+            let _tray = TrayIconBuilder::new()
+                .icon(app.default_window_icon().expect("缺省图标").clone())
+                .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| {
+                    if event.id.as_ref() == "quit" {
+                        app.exit(0);
+                    }
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click { .. } = event {
+                        let app = tray.app_handle();
+                        let inner = app.state::<Inner>();
+                        if inner.visible.load(Ordering::Relaxed) {
+                            close(app);
+                        } else {
+                            open(app);
+                        }
+                    }
+                })
+                .build(app)?;
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let WindowEvent::Focused(false) = event {
+                let app = window.app_handle();
+                let inner = app.state::<Inner>();
+                if !inner.visible.load(Ordering::Relaxed) {
+                    return;
+                }
+                let ov = inner.overlay.lock().unwrap();
+                // 轮询切换时焦点落在目标窗口，属于预期，不关闭
+                let keep = ov.last_activated != 0 && windows::foreground() == ov.last_activated;
+                drop(ov);
+                if !keep {
+                    close(app);
+                }
+            }
+        })
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}

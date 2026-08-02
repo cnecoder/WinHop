@@ -1,0 +1,12 @@
+{
+  "hotkey": "ctrl+space",
+  "elevate": true,
+  "programs": [
+    { "key": "c", "name": "Chrome", "process": "chrome.exe" },
+    { "key": "v", "name": "VS Code", "process": "Code.exe" },
+    { "key": "t", "name": "Terminal", "process": "WindowsTerminal.exe" },
+    { "key": "e", "name": "Explorer", "process": "explorer.exe" },
+    { "key": "s", "name": "Slack", "process": "slack.exe" },
+    { "key": "n", "name": "Notepad", "process": "notepad.exe" }
+  ]
+}
