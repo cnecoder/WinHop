@@ -371,7 +371,7 @@ pub fn capture_window(hwnd: isize, max_w: u32, max_h: u32) -> Option<Vec<u8>> {
             bmiHeader: BITMAPINFOHEADER {
                 biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
                 biWidth: tw,
-                biHeight: -th, // 自顶向下
+                biHeight: th, // 正高度 = 自底向上，经典 BMP 格式，兼容性最好
                 biPlanes: 1,
                 biBitCount: 32,
                 biCompression: 0,
@@ -393,6 +393,10 @@ pub fn capture_window(hwnd: isize, max_w: u32, max_h: u32) -> Option<Vec<u8>> {
             &mut bi,
             0,
         );
+        // DDB 的 alpha 字节可能是垃圾值，强制 255（窗口内容不透明），否则渲染发色像负片
+        for px in bits.chunks_exact_mut(4) {
+            px[3] = 255;
+        }
 
         DeleteObject(full_bmp);
         DeleteObject(thumb_bmp);
@@ -409,8 +413,7 @@ pub fn capture_window(hwnd: isize, max_w: u32, max_h: u32) -> Option<Vec<u8>> {
         data.extend_from_slice(&54u32.to_le_bytes());
         data.extend_from_slice(&40u32.to_le_bytes());
         data.extend_from_slice(&(tw as i32).to_le_bytes());
-        // GetDIBits 返回自顶向下数据，biHeight 必须为负，否则渲染上下颠倒
-        data.extend_from_slice(&(-(th as i32)).to_le_bytes());
+        data.extend_from_slice(&(th as i32).to_le_bytes()); // 自底向上，与像素数据一致
         data.extend_from_slice(&1u16.to_le_bytes());
         data.extend_from_slice(&32u16.to_le_bytes());
         data.extend_from_slice(&0u32.to_le_bytes());
