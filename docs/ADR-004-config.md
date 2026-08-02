@@ -1,4 +1,4 @@
-# ADR-004: 配置文件与捕获命令
+# ADR-004: 配置文件
 
 - 状态: 已接受 (2026-08-02)
 - 关联: [[glossary]]
@@ -13,8 +13,9 @@
 
 ```json
 {
-  "hotkey": "Ctrl+Space",
-  "autostart": false,
+  "hotkey": "ctrl+space",
+  "elevate": true,
+  "window_order": "zorder",
   "programs": [
     { "key": "c", "name": "Chrome", "process": "chrome.exe" },
     { "key": "v", "name": "VS Code", "process": "Code.exe" }
@@ -23,16 +24,21 @@
 ```
 
 字段：
-- `hotkey`: 全局热键，默认 `Ctrl+Space`
-- `autostart`: 开机自启，写入注册表 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
+- `hotkey`: 全局热键，默认 `ctrl+space`
+- `elevate`: release 构建是否提权运行（切换管理员程序必需，debug 构建忽略）
+- `window_order`: 窗口层排序 `zorder`/`mru`（见 ADR-003）
 - `programs[]`: 程序条目数组
   - `key`: 字母代号，手动指定；启动时校验重复与非法字符，冲突则报错退出
   - `name`: 显示名
   - `process`: 进程名（exe 文件名），用于窗口匹配（ADR-003）
 
-**辅助捕获命令** `wintab capture`：CLI 子命令，打印当前激活窗口的进程名与窗口标题，方便复制进配置，免去手动查 exe 路径。
+**缺失自动生成**：找不到配置文件时，在 exe 目录（或 `%APPDATA%\WinTab`）生成默认配置，开箱即用。
 
-**校验规则**：`key` 不重复、唯一；`process` 非空。加载失败时输出错误行号，不静默忽略。
+**运行中修改**：设置界面与「+ 号添加程序」会改写配置并立即落盘（`config.json` 保存路径 = 加载路径）。
+
+**校验规则**：`key` 不重复、唯一小写字母；`window_order` 非法值回退 `zorder`。加载失败时输出路径与错误，不静默忽略。
+
+**未实现（见 TODO）**：`wintab capture` 辅助捕获命令、`autostart` 开机自启。
 
 ## 后果
 

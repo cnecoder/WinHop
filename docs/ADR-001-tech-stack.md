@@ -21,9 +21,9 @@
 
 - 前端覆盖层 UI 用 Web 技术（HTML/CSS/JS），一套 UI 三平台复用
 - 三块底层 API 在 Rust 侧抽象成 `WindowManager` trait，每平台一个 adapter（Windows 先行）
-- 全局热键用 `global-hotkey` crate（跨平台）
+- 全局热键用 `tauri-plugin-global-shortcut`（RegisterHotKey，系统级）
 - Windows API 用 `windows-sys`
-- 覆盖层按键处理用 `WH_KEYBOARD_LL` 低级键盘钩子（见 ADR-005）
+- 覆盖层按键由选择页 webview 的 JS keydown 接收（见 ADR-005）
 
 ## 备选与拒绝理由
 
