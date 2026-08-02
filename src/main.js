@@ -87,10 +87,22 @@ function startAddProgram(btn) {
   const panel = document.createElement("div");
   panel.className = "add-panel";
 
-  const input = document.createElement("input");
-  input.className = "key-input";
-  input.maxLength = 1;
-  input.placeholder = "字母";
+  const fields = document.createElement("div");
+  fields.className = "add-fields";
+
+  const keyInput = document.createElement("input");
+  keyInput.className = "key-input";
+  keyInput.maxLength = 1;
+  keyInput.placeholder = "字母";
+
+  const nameInput = document.createElement("input");
+  nameInput.className = "name-input";
+  nameInput.placeholder = "名称";
+  nameInput.value = prog.name || "";
+
+  const confirmBtn = document.createElement("button");
+  confirmBtn.className = "confirm-btn";
+  confirmBtn.textContent = "确认";
 
   // 未占用字母 = a-z 减去当前列表所有字母（已配置 + 自动分配）
   const used = new Set(state.programs.map((p) => p.key));
@@ -103,29 +115,33 @@ function startAddProgram(btn) {
     b.textContent = c;
     b.addEventListener("click", (e) => {
       e.stopPropagation();
-      input.value = c;
-      confirmAdd();
+      keyInput.value = c;
+      keyInput.focus();
     });
     hint.appendChild(b);
     hint.appendChild(document.createTextNode(" "));
   }
 
   const confirmAdd = () => {
-    if (!input.value) return;
+    if (!keyInput.value) {
+      keyInput.classList.add("err");
+      setTimeout(() => keyInput.classList.remove("err"), 2000);
+      return;
+    }
     invoke("add_program", {
-      key: input.value.toLowerCase(),
-      name: prog.name || "",
+      key: keyInput.value.toLowerCase(),
+      name: nameInput.value.trim() || prog.name || "",
       process: prog.process || "",
     }).catch((err) => {
-      input.value = "";
-      input.placeholder = String(err);
-      input.classList.add("err");
-      setTimeout(() => input.classList.remove("err"), 2000);
+      keyInput.value = "";
+      keyInput.placeholder = String(err);
+      keyInput.classList.add("err");
+      setTimeout(() => keyInput.classList.remove("err"), 2000);
     });
     // 成功后 Rust 会重建列表（该行变为已配置，+ 号消失）
   };
 
-  input.addEventListener("keydown", (e) => {
+  const onKey = (e) => {
     e.stopPropagation();
     if (e.key === "Enter") {
       confirmAdd();
@@ -133,13 +149,22 @@ function startAddProgram(btn) {
       panel.remove();
       btn.style.display = "";
     }
+  };
+  keyInput.addEventListener("keydown", onKey);
+  nameInput.addEventListener("keydown", onKey);
+  confirmBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    confirmAdd();
   });
 
-  panel.appendChild(input);
+  fields.appendChild(keyInput);
+  fields.appendChild(nameInput);
+  fields.appendChild(confirmBtn);
+  panel.appendChild(fields);
   panel.appendChild(hint);
   btn.style.display = "none";
   row.insertAdjacentElement("afterend", panel);
-  input.focus();
+  keyInput.focus();
 }
 
 let hoverIdx = null;

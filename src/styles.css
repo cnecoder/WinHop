@@ -185,9 +185,45 @@ body {
 
 .add-panel {
   display: flex;
-  align-items: center;
-  gap: 12px;
+  flex-direction: column;
+  gap: 6px;
   padding: 6px 10px 6px 50px;
+}
+
+.add-fields {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+
+.name-input {
+  flex: 1;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: var(--fg);
+  border-radius: 4px;
+  font-size: 14px;
+  padding: 3px 8px;
+}
+
+.name-input:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.confirm-btn {
+  background: rgba(76, 194, 255, 0.15);
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  border-radius: 4px;
+  font-size: 13px;
+  padding: 3px 14px;
+  cursor: pointer;
+}
+
+.confirm-btn:hover {
+  background: rgba(76, 194, 255, 0.3);
 }
 
 .free-hint {
