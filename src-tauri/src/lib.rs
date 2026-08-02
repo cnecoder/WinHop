@@ -191,6 +191,18 @@ fn build_prog_list(cfg: &Config, wins_by_proc: &HashMap<String, Vec<WinInfo>>) -
             break; // 字母耗尽，不再补全
         }
     }
+    // 未运行的配置程序排到最后（运行中在前：配置序、自动补全次之；稳定排序保持组内顺序）
+    list.sort_by_key(|e| {
+        let running = wins_by_proc
+            .get(&e.process)
+            .map(|w| !w.is_empty())
+            .unwrap_or(false);
+        if running {
+            0
+        } else {
+            1
+        }
+    });
     list
 }
 
