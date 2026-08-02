@@ -10,7 +10,21 @@
     <div id="app">
       <div id="header">
         <span id="title">WinTab</span>
-        <span id="hint">Esc 退出</span>
+        <span class="header-right">
+          <button id="settings-btn" title="设置 (F2)">设置</button>
+          <span id="hint">Esc 退出</span>
+        </span>
+      </div>
+      <div id="settings" hidden>
+        <div class="setting-title">窗口排序方式</div>
+        <label class="setting-row">
+          <input type="radio" name="order" value="zorder" />
+          <span>固定序号（窗口堆叠顺序）</span>
+        </label>
+        <label class="setting-row">
+          <input type="radio" name="order" value="mru" />
+          <span>最近使用优先（上次用的排 1）</span>
+        </label>
       </div>
       <div id="list"></div>
     </div>

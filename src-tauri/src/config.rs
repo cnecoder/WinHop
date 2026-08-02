@@ -1,10 +1,12 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize, Serialize, Clone)]
 pub struct Config {
     pub hotkey: String,
     #[serde(default = "default_true")]
     pub elevate: bool,
+    #[serde(default = "default_window_order")]
+    pub window_order: String,
     pub programs: Vec<Program>,
 }
 
@@ -12,14 +14,18 @@ fn default_true() -> bool {
     true
 }
 
-#[derive(Deserialize, Clone)]
+fn default_window_order() -> String {
+    "zorder".into()
+}
+
+#[derive(Deserialize, Serialize, Clone)]
 pub struct Program {
     pub key: String,
     pub name: String,
     pub process: String,
 }
 
-pub fn load() -> Config {
+pub fn load() -> (Config, std::path::PathBuf) {
     let exe_dir = std::env::current_exe().ok().and_then(|p| {
         p.parent().map(|d| d.to_path_buf())
     });
@@ -50,13 +56,26 @@ pub fn load() -> Config {
             for p in &mut cfg.programs {
                 p.process = p.process.to_lowercase();
             }
-            return cfg;
+            return (cfg, path);
         }
     }
     panic!("找不到 config.json（已查找 exe 目录、当前目录、项目根目录）");
 }
 
+pub fn save(cfg: &Config, path: &std::path::Path) -> std::io::Result<()> {
+    let text = serde_json::to_string_pretty(cfg)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    std::fs::write(path, text)
+}
+
 fn validate(cfg: &mut Config) {
+    if cfg.window_order != "zorder" && cfg.window_order != "mru" {
+        eprintln!(
+            "[wintab] 配置 window_order 无效「{}」，回退为 zorder",
+            cfg.window_order
+        );
+        cfg.window_order = "zorder".into();
+    }
     let mut seen = std::collections::HashSet::new();
     for p in &cfg.programs {
         if p.key.len() != 1 || !p.key.as_bytes()[0].is_ascii_lowercase() {

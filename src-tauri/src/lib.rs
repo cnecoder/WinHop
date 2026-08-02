@@ -60,7 +60,9 @@ impl Default for OverlayState {
 }
 
 struct Inner {
-    cfg: Config,
+    cfg: Mutex<Config>,
+    cfg_path: std::path::PathBuf,
+    mru: Mutex<HashMap<isize, u64>>,
     visible: Arc<AtomicBool>,
     overlay: Mutex<OverlayState>,
     prev_fg: AtomicIsize,
@@ -89,16 +91,19 @@ struct Render {
     visible: bool,
     phase: String,
     title: String,
+    window_order: String,
     programs: Vec<ProgramUi>,
     windows: Vec<WindowUi>,
 }
 
 fn emit(app: &AppHandle, inner: &Inner, ov: &OverlayState) {
+    let cfg = inner.cfg.lock().unwrap();
     let visible = inner.visible.load(Ordering::Relaxed);
     let mut render = Render {
         visible,
         phase: "programs".into(),
         title: String::new(),
+        window_order: cfg.window_order.clone(),
         programs: Vec::new(),
         windows: Vec::new(),
     };
@@ -137,6 +142,7 @@ fn emit(app: &AppHandle, inner: &Inner, ov: &OverlayState) {
             active: i == ov.prog_sel,
         });
     }
+    drop(cfg);
     let _ = app.emit("overlay", &render);
 }
 
@@ -186,7 +192,8 @@ fn open(app: &AppHandle) {
     }
     let mut ov = inner.overlay.lock().unwrap();
     ov.phase = Phase::Programs;
-    ov.prog_list = build_prog_list(&inner.cfg, &wins_by_proc);
+    let cfg = inner.cfg.lock().unwrap().clone();
+    ov.prog_list = build_prog_list(&cfg, &wins_by_proc);
     ov.wins_by_proc = wins_by_proc;
     ov.prog_sel = 0;
     ov.sel_proc = None;
@@ -254,6 +261,7 @@ fn close(app: &AppHandle) {
         visible: false,
         phase: "programs".into(),
         title: String::new(),
+        window_order: inner.cfg.lock().unwrap().window_order.clone(),
         programs: Vec::new(),
         windows: Vec::new(),
     };
@@ -278,9 +286,11 @@ fn select_entry(app: &AppHandle, inner: &Inner, ov: &mut OverlayState, entry: &P
             return false;
         }
     };
+    let now = windows::now_ms();
     if ov.phase == Phase::Windows && ov.sel_proc.as_deref() == Some(entry.process.as_str()) {
         ov.active = (ov.active + 1) % wins.len();
         ov.last_activated = wins[ov.active].hwnd;
+        inner.mru.lock().unwrap().insert(wins[ov.active].hwnd, now);
         deferred_activate(app, wins[ov.active].hwnd);
         eprintln!("[wintab] 轮询 {} 窗口 {}", entry.name, ov.active + 1);
         emit(app, inner, ov);
@@ -289,15 +299,22 @@ fn select_entry(app: &AppHandle, inner: &Inner, ov: &mut OverlayState, entry: &P
     if wins.len() == 1 {
         ov.switched = true;
         ov.last_activated = wins[0].hwnd;
+        inner.mru.lock().unwrap().insert(wins[0].hwnd, now);
         inner.pending_activate.store(wins[0].hwnd, Ordering::Relaxed);
         true
     } else {
         ov.phase = Phase::Windows;
         ov.sel_proc = Some(entry.process.clone());
-        ov.wins = wins.clone();
+        // mru 模式：按最近使用时间倒序编号，1 = 上次用的；时间戳相同保持 Z 序（稳定排序）
+        let mut wins = wins.clone();
+        if inner.cfg.lock().unwrap().window_order == "mru" {
+            let mru = inner.mru.lock().unwrap();
+            wins.sort_by_key(|w| std::cmp::Reverse(mru.get(&w.hwnd).copied().unwrap_or(0)));
+        }
+        ov.wins = wins;
         ov.active = 0;
         ov.digit_buf.clear();
-        eprintln!("[wintab] '{}' -> {} 窗口数 {}", entry.key, entry.name, wins.len());
+        eprintln!("[wintab] '{}' -> {} 窗口数 {}", entry.key, entry.name, ov.wins.len());
         emit(app, inner, ov);
         false
     }
@@ -319,6 +336,7 @@ fn resolve_window(inner: &Inner, ov: &mut OverlayState, n: usize) -> bool {
     let idx = (n - 1).min(total - 1);
     ov.switched = true;
     ov.last_activated = ov.wins[idx].hwnd;
+    inner.mru.lock().unwrap().insert(ov.wins[idx].hwnd, windows::now_ms());
     inner.pending_activate.store(ov.wins[idx].hwnd, Ordering::Relaxed);
     eprintln!("[wintab] 切换到窗口 {}", idx + 1);
     true
@@ -342,6 +360,26 @@ fn key(app: AppHandle, k: String) {
         _ => return,
     };
     handle_key(&app, msg);
+}
+
+// 设置界面：修改窗口排序方式，立即落盘
+#[tauri::command]
+fn set_window_order(app: AppHandle, order: String) -> Result<(), String> {
+    if order != "zorder" && order != "mru" {
+        return Err(format!("无效的排序方式「{}」", order));
+    }
+    let inner = app.state::<Inner>();
+    {
+        let mut cfg = inner.cfg.lock().unwrap();
+        cfg.window_order = order.clone();
+        config::save(&cfg, &inner.cfg_path).map_err(|e| format!("保存配置失败: {}", e))?;
+    }
+    eprintln!("[t={}] 窗口排序方式改为 {}", windows::now_ms(), order);
+    if inner.visible.load(Ordering::Relaxed) {
+        let ov = inner.overlay.lock().unwrap();
+        emit(&app, &inner, &ov);
+    }
+    Ok(())
 }
 
 fn handle_key(app: &AppHandle, msg: HookMsg) {
@@ -447,7 +485,7 @@ fn handle_key(app: &AppHandle, msg: HookMsg) {
 pub fn run() {
     windows::redirect_stderr_to_file();
     eprintln!("=== wintab start ===");
-    let cfg = config::load();
+    let (cfg, cfg_path) = config::load();
     // taskmgr 等管理员程序需要提权才能钩子生效/激活；debug 构建跳过（dev 迭代不弹 UAC）
     if cfg.elevate && !cfg!(debug_assertions) && !windows::is_elevated() {
         windows::relaunch_elevated();
@@ -476,11 +514,13 @@ pub fn run() {
                 })
                 .build(),
         )
-        .invoke_handler(tauri::generate_handler![key])
+        .invoke_handler(tauri::generate_handler![key, set_window_order])
         .setup(move |app| {
             let visible = Arc::new(AtomicBool::new(false));
             app.manage(Inner {
-                cfg,
+                cfg: Mutex::new(cfg),
+                cfg_path,
+                mru: Mutex::new(HashMap::new()),
                 visible: visible.clone(),
                 overlay: Mutex::new(OverlayState::default()),
                 prev_fg: AtomicIsize::new(0),
@@ -493,13 +533,25 @@ pub fn run() {
             // 健康看门狗：检测隐形覆盖层（visible=true 但窗口不可见）与空闲卡死，
             // 自动强制关闭并留日志，避免「无响应吞键」状态持续
             let health_handle = app.handle().clone();
-            std::thread::spawn(move || loop {
-                std::thread::sleep(Duration::from_secs(2));
-                let inner = health_handle.state::<Inner>();
-                if !inner.visible.load(Ordering::Relaxed) {
-                    continue;
-                }
-                let hwnd = windows::get_overlay_hwnd();
+            std::thread::spawn(move || {
+                let mut last_fg: isize = 0;
+                loop {
+                    std::thread::sleep(Duration::from_secs(2));
+                    let inner = health_handle.state::<Inner>();
+                    // MRU 补录：用户手动点击/切换前台窗口也计入最近使用
+                    let fg = windows::foreground();
+                    if fg != 0 && fg != last_fg {
+                        inner
+                            .mru
+                            .lock()
+                            .unwrap()
+                            .insert(fg, windows::now_ms());
+                        last_fg = fg;
+                    }
+                    if !inner.visible.load(Ordering::Relaxed) {
+                        continue;
+                    }
+                    let hwnd = windows::get_overlay_hwnd();
                 if hwnd != 0 && !windows::overlay_visible(hwnd) {
                     eprintln!(
                         "[t={}] 分叉检测：visible=true 但窗口不可见，强制关闭",
@@ -516,6 +568,7 @@ pub fn run() {
                         idle
                     );
                     close(&health_handle);
+                }
                 }
             });
             // 托盘：鼠标路径不受任何键盘钩子影响，保证 taskmgr 等场景下仍可唤出

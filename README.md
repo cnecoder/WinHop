@@ -28,6 +28,7 @@ Ctrl+Space（默认热键，可配置）
 - **双屏**：条目显示 `[屏N]` 标签（窗口与显示器相交面积判定）；切换后窗口留在原屏幕
 - **方向键导航**：↑↓ 移动高亮 + Enter 确认
 - **自动补全**：未配置的运行中程序自动分配字母
+- **设置界面**：覆盖层内按 F2 或点「设置」按钮，窗口排序方式可选（固定序号 / 最近使用优先）
 - **托盘常驻**：托盘图标点击唤出，菜单可退出
 - **管理员程序支持**（release 构建）：以提权运行，可切换 taskmgr 等 UIPI 保护的窗口
 - **单实例**：重复启动自动退出
@@ -52,6 +53,7 @@ release 版运行 `src-tauri/target/release/wintab.exe`（首次启动弹 UAC �
 {
   "hotkey": "ctrl+space",
   "elevate": true,
+  "window_order": "zorder",
   "programs": [
     { "key": "c", "name": "Chrome", "process": "chrome.exe" },
     { "key": "v", "name": "VS Code", "process": "Code.exe" },
@@ -64,6 +66,7 @@ release 版运行 `src-tauri/target/release/wintab.exe`（首次启动弹 UAC �
 |---|---|
 | `hotkey` | 全局热键，格式 `修饰键+按键`：ctrl/alt/shift/win + space/esc/enter/tab/字母/数字 |
 | `elevate` | release 构建是否提权运行（切换管理员程序必需，debug 构建忽略） |
+| `window_order` | 窗口层排序：`zorder` 固定序号（堆叠顺序）/ `mru` 最近使用优先（上次用的排 1）。可在设置界面改，运行时落盘 |
 | `programs[]` | 程序条目：`key` 单字母代号（不重复）、`name` 显示名、`process` exe 文件名 |
 
 ## 输入架构（为什么这样设计）

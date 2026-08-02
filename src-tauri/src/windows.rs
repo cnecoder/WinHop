@@ -12,8 +12,8 @@ use windows_sys::Win32::Storage::FileSystem::{
 };
 use windows_sys::Win32::System::Console::{SetStdHandle, STD_ERROR_HANDLE};
 use windows_sys::Win32::System::Threading::{
-    AttachThreadInput, CreateMutexW, GetCurrentProcess, GetCurrentThreadId, OpenProcess,
-    OpenProcessToken, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
+    AttachThreadInput, CreateMutexW, GetCurrentProcess, GetCurrentProcessId, GetCurrentThreadId,
+    OpenProcess, OpenProcessToken, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     VK_MENU, keybd_event, KEYEVENTF_KEYUP,
@@ -151,6 +151,11 @@ pub fn enum_windows() -> Vec<WinInfo> {
 unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
     if IsWindowVisible(hwnd) == 0 {
         return 1;
+    }
+    let mut own_pid: u32 = 0;
+    GetWindowThreadProcessId(hwnd, &mut own_pid);
+    if own_pid != 0 && own_pid == GetCurrentProcessId() {
+        return 1; // 排除自身（覆盖层）
     }
     let mut class = [0u16; 256];
     let len = GetClassNameW(hwnd, class.as_mut_ptr(), class.len() as i32);

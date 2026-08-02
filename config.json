@@ -1,6 +1,7 @@
 {
   "hotkey": "ctrl+space",
   "elevate": true,
+  "window_order": "zorder",
   "programs": [
     { "key": "c", "name": "Chrome", "process": "chrome.exe" },
     { "key": "v", "name": "VS Code", "process": "Code.exe" },
