@@ -267,7 +267,12 @@ body {
   color: var(--off);
 }
 
-/* 窗口层：左列表 + 右侧大缩略图预览 */
+/* 窗口层：左列表 + 右侧大缩略图预览（撑满全屏宽，列表贴最左，预览占约 3/4 屏） */
+#list.window-layer {
+  max-width: none;
+  margin: 0;
+}
+
 .window-layer {
   display: flex;
   gap: 18px;
