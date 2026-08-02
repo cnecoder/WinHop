@@ -77,33 +77,65 @@ listEl.addEventListener("click", (e) => {
   }
 });
 
-// "+" 号：行内弹出字母输入框，Enter 确认入配置
+// "+" 号：行内弹出字母输入框 + 可用字母提示，Enter 确认入配置
 function startAddProgram(btn) {
   const row = btn.closest(".row");
+  row.classList.add("adding");
+  const prog = state.programs.find((p) => p.key === row.dataset.key) || {};
+
   const input = document.createElement("input");
   input.className = "key-input";
   input.maxLength = 1;
   input.placeholder = "字母";
+
+  // 未占用字母 = a-z 减去当前列表所有字母（已配置 + 自动分配）
+  const used = new Set(state.programs.map((p) => p.key));
+  const free = "abcdefghijklmnopqrstuvwxyz".split("").filter((c) => !used.has(c));
+  const hint = document.createElement("span");
+  hint.className = "free-hint";
+  hint.appendChild(document.createTextNode("可用字母: "));
+  for (const c of free) {
+    const b = document.createElement("b");
+    b.textContent = c;
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      input.value = c;
+      confirmAdd();
+    });
+    hint.appendChild(b);
+    hint.appendChild(document.createTextNode(" "));
+  }
+
+  const confirmAdd = () => {
+    if (!input.value) return;
+    invoke("add_program", {
+      key: input.value.toLowerCase(),
+      name: prog.name || "",
+      process: prog.process || "",
+    }).catch((err) => {
+      input.value = "";
+      input.placeholder = String(err);
+      input.classList.add("err");
+      setTimeout(() => input.classList.remove("err"), 2000);
+    });
+    // 成功后 Rust 会重建列表（该行变为已配置，+ 号消失）
+  };
+
   input.addEventListener("keydown", (e) => {
     e.stopPropagation();
-    if (e.key === "Enter" && input.value) {
-      const prog = state.programs.find((p) => p.key === row.dataset.key) || {};
-      invoke("add_program", {
-        key: input.value.toLowerCase(),
-        name: prog.name || "",
-        process: prog.process || "",
-      }).catch((err) => {
-        input.value = "";
-        input.placeholder = String(err);
-      });
-      // 成功后 Rust 会重建列表（该行变为已配置，+ 号消失）
+    if (e.key === "Enter") {
+      confirmAdd();
     } else if (e.key === "Escape") {
       input.remove();
+      hint.remove();
+      row.classList.remove("adding");
       btn.style.display = "";
     }
   });
+
   btn.style.display = "none";
   btn.insertAdjacentElement("afterend", input);
+  input.insertAdjacentElement("afterend", hint);
   input.focus();
 }
 
