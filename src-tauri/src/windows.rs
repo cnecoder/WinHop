@@ -5,7 +5,6 @@ use windows_sys::Win32::Foundation::{
     CloseHandle, BOOL, GENERIC_WRITE, HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM, LRESULT, RECT,
     WPARAM, ERROR_ALREADY_EXISTS, GetLastError,
 };
-use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::Graphics::Gdi::EnumDisplayMonitors;
 use windows_sys::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_QUERY};
 use windows_sys::Win32::Storage::FileSystem::{
@@ -320,60 +319,18 @@ pub fn foreground() -> isize {
     unsafe { GetForegroundWindow() as isize }
 }
 
-// DWM Thumbnail 捕获窗口内容（win+tab 同款管道）：
-// - 对 Chromium GPU 合成窗口颜色正确（PrintWindow 直抓会反转，实测）
-// - 每个窗口独立捕获，重叠/被遮挡也能拿到各自内容（屏幕直捕只能看到顶层窗口）
-// - 无需覆盖层隐藏（DWM 缩略图与窗口遮挡无关）
-// 流程：隐藏目标窗口 → DwmRegisterThumbnail → 等 DWM 合成 → PrintWindow 目标窗口读像素
-fn ensure_hidden_window() -> HWND {
-    unsafe {
-        static WINDOW: OnceLock<isize> = OnceLock::new();
-        *WINDOW.get_or_init(|| {
-            use windows_sys::Win32::UI::WindowsAndMessaging::{
-                CreateWindowExW, DefWindowProcW, RegisterClassExW, CS_HREDRAW, CS_VREDRAW,
-                WNDCLASSEXW, WS_POPUP,
-            };
-            let class = to_wide("WinTabThumbTarget");
-            let hinst = GetModuleHandleW(std::ptr::null());
-            let mut wc: WNDCLASSEXW = std::mem::zeroed();
-            wc.cbSize = std::mem::size_of::<WNDCLASSEXW>() as u32;
-            wc.hInstance = hinst;
-            wc.lpfnWndProc = Some(DefWindowProcW);
-            wc.lpszClassName = class.as_ptr();
-            wc.style = CS_HREDRAW | CS_VREDRAW;
-            RegisterClassExW(&wc);
-            CreateWindowExW(
-                0,
-                class.as_ptr(),
-                class.as_ptr(),
-                WS_POPUP,
-                0,
-                0,
-                1,
-                1,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                hinst,
-                std::ptr::null_mut(),
-            ) as isize
-        }) as HWND
-    }
-}
-
+// PrintWindow 直捕窗口内容（每窗口独立、遮挡无关）→ StretchBlt 等比缩小 → 24bpp BMP。
+// 经实测验证：PrintWindow 与屏幕像素一致（平均差 <1）；
+// 之前「色彩反转/失真」为误诊——对照时屏幕位置显示的是另一覆盖窗口。
+// 24bpp 无 alpha 字节，消除 BMP 解码歧义（32bpp 的 alpha/方向问题曾导致显示异常）。
 pub fn capture_window(hwnd: isize, max_w: u32, max_h: u32) -> Option<Vec<u8>> {
     unsafe {
-        use windows_sys::Win32::Graphics::Dwm::{
-            DwmFlush, DwmRegisterThumbnail, DwmUnregisterThumbnail, DwmUpdateThumbnailProperties,
-            DWM_THUMBNAIL_PROPERTIES, DWM_TNP_OPACITY, DWM_TNP_RECTDESTINATION, DWM_TNP_VISIBLE,
-        };
         use windows_sys::Win32::Graphics::Gdi::{
             CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDIBits, GetDC,
-            ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER,
+            ReleaseDC, SelectObject, SRCCOPY, StretchBlt, BITMAPINFO, BITMAPINFOHEADER,
         };
         use windows_sys::Win32::Storage::Xps::PrintWindow;
-        use windows_sys::Win32::UI::WindowsAndMessaging::{
-            SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER, PW_RENDERFULLCONTENT,
-        };
+        use windows_sys::Win32::UI::WindowsAndMessaging::PW_RENDERFULLCONTENT;
 
         let h = hwnd as HWND;
         let mut rect = RECT {
@@ -396,65 +353,30 @@ pub fn capture_window(hwnd: isize, max_w: u32, max_h: u32) -> Option<Vec<u8>> {
         let tw = (w as f64 * scale).max(1.0) as i32;
         let th = (hh as f64 * scale).max(1.0) as i32;
 
-        let target = ensure_hidden_window();
-        if target.is_null() {
-            return None;
-        }
-        SetWindowPos(
-            target,
-            std::ptr::null_mut(),
-            0,
-            0,
-            tw,
-            th,
-            SWP_NOZORDER | SWP_NOACTIVATE,
-        );
-
-        let mut hthumb: isize = 0;
-        if DwmRegisterThumbnail(target, h, &mut hthumb) < 0 || hthumb == 0 {
-            return None;
-        }
-        let props = DWM_THUMBNAIL_PROPERTIES {
-            dwFlags: DWM_TNP_RECTDESTINATION | DWM_TNP_VISIBLE | DWM_TNP_OPACITY,
-            rcDestination: RECT {
-                left: 0,
-                top: 0,
-                right: tw,
-                bottom: th,
-            },
-            rcSource: RECT {
-                left: 0,
-                top: 0,
-                right: w,
-                bottom: hh,
-            },
-            opacity: 255,
-            fVisible: 1,
-            fSourceClientAreaOnly: 0,
-        };
-        DwmUpdateThumbnailProperties(hthumb, &props);
-        DwmFlush();
-        // 等 DWM 合成首帧
-        std::thread::sleep(std::time::Duration::from_millis(40));
-
         let screen = GetDC(std::ptr::null_mut());
         let mem = CreateCompatibleDC(screen);
         let bmp = CreateCompatibleBitmap(screen, tw, th);
+        let tmp_mem = CreateCompatibleDC(screen);
+        let tmp_bmp = CreateCompatibleBitmap(screen, w, hh);
         ReleaseDC(std::ptr::null_mut(), screen);
-        let _ = DwmUnregisterThumbnail(hthumb);
-        if mem.is_null() || bmp.is_null() {
+        if mem.is_null() || bmp.is_null() || tmp_mem.is_null() || tmp_bmp.is_null() {
             return None;
         }
         let _old = SelectObject(mem, bmp);
-        PrintWindow(target, mem, PW_RENDERFULLCONTENT);
+        let _old_tmp = SelectObject(tmp_mem, tmp_bmp);
+
+        PrintWindow(h, tmp_mem, PW_RENDERFULLCONTENT);
+        StretchBlt(mem, 0, 0, tw, th, tmp_mem, 0, 0, w, hh, SRCCOPY);
+        DeleteObject(tmp_bmp);
+        DeleteDC(tmp_mem);
 
         let mut bi = BITMAPINFO {
             bmiHeader: BITMAPINFOHEADER {
                 biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
                 biWidth: tw,
-                biHeight: th, // 正高度 = 自底向上，经典 BMP 格式，兼容性最好
+                biHeight: th, // 正高度 = 自底向上
                 biPlanes: 1,
-                biBitCount: 32,
+                biBitCount: 24, // 24bpp 无 alpha，最通用格式
                 biCompression: 0,
                 biSizeImage: 0,
                 biXPelsPerMeter: 0,
@@ -464,7 +386,8 @@ pub fn capture_window(hwnd: isize, max_w: u32, max_h: u32) -> Option<Vec<u8>> {
             },
             bmiColors: std::mem::zeroed(),
         };
-        let mut bits = vec![0u8; (tw * th * 4) as usize];
+        let row_size = ((tw * 3 + 3) / 4) * 4; // 24bpp 行按 4 字节对齐
+        let mut bits = vec![0u8; (row_size * th) as usize];
         GetDIBits(
             mem,
             bmp,
@@ -474,16 +397,11 @@ pub fn capture_window(hwnd: isize, max_w: u32, max_h: u32) -> Option<Vec<u8>> {
             &mut bi,
             0,
         );
-        // DDB 的 alpha 字节可能是垃圾值，强制 255（窗口内容不透明），否则渲染发色像负片
-        for px in bits.chunks_exact_mut(4) {
-            px[3] = 255;
-        }
 
         DeleteObject(bmp);
         DeleteDC(mem);
 
-        // 组装 BMP：54 字节头 + 每行 4 字节对齐的 BGRA 像素
-        let row_size = ((tw * 4 + 3) / 4) * 4;
+        // 组装 24bpp BMP：54 字节头 + 对齐行像素
         let file_size = 54u32 + row_size as u32 * th as u32;
         let mut data = Vec::with_capacity(file_size as usize);
         data.extend_from_slice(b"BM");
@@ -492,20 +410,16 @@ pub fn capture_window(hwnd: isize, max_w: u32, max_h: u32) -> Option<Vec<u8>> {
         data.extend_from_slice(&54u32.to_le_bytes());
         data.extend_from_slice(&40u32.to_le_bytes());
         data.extend_from_slice(&(tw as i32).to_le_bytes());
-        data.extend_from_slice(&(th as i32).to_le_bytes()); // 自底向上，与像素数据一致
+        data.extend_from_slice(&(th as i32).to_le_bytes());
         data.extend_from_slice(&1u16.to_le_bytes());
-        data.extend_from_slice(&32u16.to_le_bytes());
+        data.extend_from_slice(&24u16.to_le_bytes());
         data.extend_from_slice(&0u32.to_le_bytes());
-        data.extend_from_slice(&((row_size * th) as u32).to_le_bytes());
+        data.extend_from_slice(&(row_size as u32 * th as u32).to_le_bytes());
         data.extend_from_slice(&0i32.to_le_bytes());
         data.extend_from_slice(&0i32.to_le_bytes());
         data.extend_from_slice(&0u32.to_le_bytes());
         data.extend_from_slice(&0u32.to_le_bytes());
-        for row in 0..th as usize {
-            let start = row * (tw as usize * 4);
-            data.extend_from_slice(&bits[start..start + tw as usize * 4]);
-            data.extend(std::iter::repeat(0u8).take(row_size as usize - tw as usize * 4));
-        }
+        data.extend_from_slice(&bits[..(row_size * th) as usize]);
         Some(data)
     }
 }
