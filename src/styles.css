@@ -187,10 +187,19 @@ body {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 7px 10px;
+  padding: 6px 10px;
   border-radius: 6px;
   font-size: 15px;
   cursor: pointer;
+}
+
+.wthumb {
+  width: 96px;
+  height: 54px;
+  object-fit: cover;
+  border-radius: 4px;
+  background: #111;
+  flex-shrink: 0;
 }
 
 .wrow.active {

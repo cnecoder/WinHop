@@ -74,6 +74,30 @@ listEl.addEventListener("click", (e) => {
 let thumbTimer = null;
 let hoverIdx = null;
 
+// 左侧行小缩略图：每行一个，2 秒刷新
+async function loadThumbs() {
+  if (!state || state.phase !== "windows") return;
+  const rows = document.querySelectorAll(".wrow[data-hwnd]");
+  for (const row of rows) {
+    const img = row.querySelector("img.wthumb");
+    if (!img) continue;
+    if (img.dataset.hwnd !== row.dataset.hwnd) {
+      img.dataset.hwnd = row.dataset.hwnd;
+      img.src = "";
+    }
+    try {
+      const url = await invoke("window_thumbnail", {
+        hwnd: Number(row.dataset.hwnd),
+        maxW: 160,
+        maxH: 100,
+      });
+      if (img.dataset.hwnd === row.dataset.hwnd) img.src = url;
+    } catch (err) {
+      img.src = "";
+    }
+  }
+}
+
 // 右侧大缩略图预览：目标 = 悬停行（优先）或当前选中行，每 2 秒刷新
 async function loadPreview() {
   if (!state || state.phase !== "windows") return;
@@ -100,8 +124,12 @@ async function loadPreview() {
 
 function startThumbs() {
   stopThumbs();
+  loadThumbs();
   loadPreview();
-  thumbTimer = setInterval(loadPreview, 2000);
+  thumbTimer = setInterval(() => {
+    loadThumbs();
+    loadPreview();
+  }, 2000);
 }
 
 function stopThumbs() {
@@ -164,6 +192,7 @@ function render(s) {
         .map(
           (w) =>
             `<div class="wrow${w.active ? " active" : ""}" data-idx="${w.index}" data-hwnd="${w.hwnd}">` +
+            `<img class="wthumb" alt="" />` +
             `<span class="key">${w.index}</span>` +
             `<span class="name">${escapeHtml(w.title)}</span>` +
             `<span class="screen">屏${w.screen + 1}</span>` +
