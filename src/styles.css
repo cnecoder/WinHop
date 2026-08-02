@@ -93,6 +93,21 @@ body {
   accent-color: var(--accent);
 }
 
+.setting-row-btn {
+  background: none;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: var(--dim);
+  border-radius: 5px;
+  padding: 3px 12px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.setting-row-btn:hover {
+  color: #ff6b6b;
+  border-color: #ff6b6b;
+}
+
 #list {
   padding-top: 10px;
 }

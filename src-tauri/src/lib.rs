@@ -367,6 +367,12 @@ fn key(app: AppHandle, k: String) {
     handle_key(&app, msg);
 }
 
+#[tauri::command]
+fn quit_app(app: AppHandle) {
+    eprintln!("[t={}] 设置面板退出", windows::now_ms());
+    app.exit(0);
+}
+
 // 设置界面：修改窗口排序方式，立即落盘
 #[tauri::command]
 fn set_window_order(app: AppHandle, order: String) -> Result<(), String> {
@@ -519,7 +525,7 @@ pub fn run() {
                 })
                 .build(),
         )
-        .invoke_handler(tauri::generate_handler![key, set_window_order])
+        .invoke_handler(tauri::generate_handler![key, set_window_order, quit_app])
         .setup(move |app| {
             let visible = Arc::new(AtomicBool::new(false));
             app.manage(Inner {

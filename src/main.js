@@ -65,6 +65,10 @@ document.querySelectorAll('input[name="order"]').forEach((r) => {
   });
 });
 
+document.getElementById("quit-btn").addEventListener("click", () => {
+  invoke("quit_app");
+});
+
 function render(state) {
   if (!state.visible) {
     appEl.style.display = "none";
