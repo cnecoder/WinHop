@@ -154,10 +154,6 @@ listEl.addEventListener("mouseleave", () => {
   }
 });
 
-document.getElementById("fullscreen-btn").addEventListener("click", () => {
-  invoke("toggle_fullscreen");
-});
-
 document.querySelectorAll('input[name="order"]').forEach((r) => {
   r.addEventListener("change", () => {
     if (r.checked) {

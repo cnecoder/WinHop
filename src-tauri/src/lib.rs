@@ -222,6 +222,8 @@ fn open(app: &AppHandle) {
             let _ = win.set_position(PhysicalPosition::new(x, y));
         }
         let _ = win.show();
+        // 整个覆盖层默认全屏（Win+Tab 风格选择页）
+        set_overlay_fullscreen(app, true);
         // 覆盖层必须夺焦：否则前台是 Chromium 时按键走 raw input，谁也收不到。
         // 夺焦后按键落在覆盖层自己的 webview，由 JS keydown 接收（本窗口内部 raw input 可达）。
         let _ = win.set_focus();
@@ -341,7 +343,6 @@ fn select_entry(app: &AppHandle, inner: &Inner, ov: &mut OverlayState, entry: &P
         ov.wins = wins;
         ov.active = 0;
         ov.digit_buf.clear();
-        set_overlay_fullscreen(app, true);
         eprintln!("[wintab] '{}' -> {} 窗口数 {}", entry.key, entry.name, ov.wins.len());
         emit(app, inner, ov);
         false
@@ -468,7 +469,6 @@ fn handle_key(app: &AppHandle, msg: HookMsg) {
                 ov.phase = Phase::Programs;
                 ov.sel_proc = None;
                 ov.digit_buf.clear();
-                set_overlay_fullscreen(app, false);
                 emit(app, &inner, &ov);
             }
             Phase::Programs => {

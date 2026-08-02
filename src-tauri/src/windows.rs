@@ -409,7 +409,8 @@ pub fn capture_window(hwnd: isize, max_w: u32, max_h: u32) -> Option<Vec<u8>> {
         data.extend_from_slice(&54u32.to_le_bytes());
         data.extend_from_slice(&40u32.to_le_bytes());
         data.extend_from_slice(&(tw as i32).to_le_bytes());
-        data.extend_from_slice(&(th as i32).to_le_bytes());
+        // GetDIBits 返回自顶向下数据，biHeight 必须为负，否则渲染上下颠倒
+        data.extend_from_slice(&(-(th as i32)).to_le_bytes());
         data.extend_from_slice(&1u16.to_le_bytes());
         data.extend_from_slice(&32u16.to_le_bytes());
         data.extend_from_slice(&0u32.to_le_bytes());
