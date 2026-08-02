@@ -84,6 +84,7 @@ struct WindowUi {
     title: String,
     screen: u32,
     active: bool,
+    hwnd: isize,
 }
 
 #[derive(Serialize, Clone)]
@@ -124,6 +125,7 @@ fn emit(app: &AppHandle, inner: &Inner, ov: &OverlayState) {
                     title: w.title.clone(),
                     screen: w.monitor,
                     active: i == ov.active,
+                    hwnd: w.hwnd,
                 });
             }
         }
@@ -367,6 +369,29 @@ fn key(app: AppHandle, k: String) {
     handle_key(&app, msg);
 }
 
+// 窗口缩略图（win+tab 风格）：PrintWindow 捕获 → BMP base64。async 跑在工作线程，不阻塞主线程
+#[tauri::command]
+async fn window_thumbnail(hwnd: isize, max_w: u32, max_h: u32) -> Result<String, String> {
+    let bmp = windows::capture_window(hwnd, max_w, max_h).ok_or("窗口捕获失败")?;
+    eprintln!(
+        "[t={}] 缩略图 hwnd={:#x} bytes={}",
+        windows::now_ms(),
+        hwnd,
+        bmp.len()
+    );
+    Ok(format!("data:image/bmp;base64,{}", windows::base64(&bmp)))
+}
+
+#[tauri::command]
+async fn toggle_fullscreen(app: AppHandle) {
+    if let Some(win) = app.get_webview_window("main") {
+        let is_full = win.is_fullscreen().unwrap_or(false);
+        if win.set_fullscreen(!is_full).is_err() {
+            eprintln!("[t={}] 切换全屏失败", windows::now_ms());
+        }
+    }
+}
+
 #[tauri::command]
 fn quit_app(app: AppHandle) {
     eprintln!("[t={}] 设置面板退出", windows::now_ms());
@@ -525,7 +550,13 @@ pub fn run() {
                 })
                 .build(),
         )
-        .invoke_handler(tauri::generate_handler![key, set_window_order, quit_app])
+        .invoke_handler(tauri::generate_handler![
+            key,
+            set_window_order,
+            quit_app,
+            window_thumbnail,
+            toggle_fullscreen
+        ])
         .setup(move |app| {
             let visible = Arc::new(AtomicBool::new(false));
             app.manage(Inner {

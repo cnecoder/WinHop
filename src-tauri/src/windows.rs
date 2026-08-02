@@ -319,6 +319,133 @@ pub fn foreground() -> isize {
     unsafe { GetForegroundWindow() as isize }
 }
 
+// PrintWindow 捕获窗口内容，缩放后输出 BMP 字节（win+tab 风格缩略图）。
+// 注意：非提权进程捕获提权窗口会得到空白（UIPI）。
+pub fn capture_window(hwnd: isize, max_w: u32, max_h: u32) -> Option<Vec<u8>> {
+    unsafe {
+        use windows_sys::Win32::Graphics::Gdi::{
+            CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDIBits,
+            GetWindowDC, ReleaseDC, SelectObject, SRCCOPY, StretchBlt, BITMAPINFO,
+            BITMAPINFOHEADER,
+        };
+        use windows_sys::Win32::Storage::Xps::PrintWindow;
+        use windows_sys::Win32::UI::WindowsAndMessaging::PW_RENDERFULLCONTENT;
+
+        let h = hwnd as HWND;
+        let mut rect = RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        if GetWindowRect(h, &mut rect) == 0 {
+            return None;
+        }
+        let w = rect.right - rect.left;
+        let hh = rect.bottom - rect.top;
+        if w <= 0 || hh <= 0 {
+            return None;
+        }
+        let scale = ((max_w as f64) / w as f64)
+            .min((max_h as f64) / hh as f64)
+            .min(1.0);
+        let tw = (w as f64 * scale).max(1.0) as i32;
+        let th = (hh as f64 * scale).max(1.0) as i32;
+
+        let screen = GetWindowDC(std::ptr::null_mut());
+        let full_mem = CreateCompatibleDC(screen);
+        let full_bmp = CreateCompatibleBitmap(screen, w, hh);
+        let thumb_mem = CreateCompatibleDC(screen);
+        let thumb_bmp = CreateCompatibleBitmap(screen, tw, th);
+        ReleaseDC(std::ptr::null_mut(), screen);
+        if full_mem.is_null() || thumb_mem.is_null() || full_bmp.is_null() || thumb_bmp.is_null() {
+            return None;
+        }
+        let _old_full = SelectObject(full_mem, full_bmp);
+        let _old_thumb = SelectObject(thumb_mem, thumb_bmp);
+
+        PrintWindow(h, full_mem, PW_RENDERFULLCONTENT);
+        StretchBlt(thumb_mem, 0, 0, tw, th, full_mem, 0, 0, w, hh, SRCCOPY);
+
+        let mut bi = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: tw,
+                biHeight: -th, // 自顶向下
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: 0,
+                biSizeImage: 0,
+                biXPelsPerMeter: 0,
+                biYPelsPerMeter: 0,
+                biClrUsed: 0,
+                biClrImportant: 0,
+            },
+            bmiColors: std::mem::zeroed(),
+        };
+        let mut bits = vec![0u8; (tw * th * 4) as usize];
+        GetDIBits(
+            thumb_mem,
+            thumb_bmp,
+            0,
+            th as u32,
+            bits.as_mut_ptr() as *mut c_void,
+            &mut bi,
+            0,
+        );
+
+        DeleteObject(full_bmp);
+        DeleteObject(thumb_bmp);
+        DeleteDC(full_mem);
+        DeleteDC(thumb_mem);
+
+        // 组装 BMP：54 字节头 + 每行 4 字节对齐的 BGRA 像素
+        let row_size = ((tw * 4 + 3) / 4) * 4;
+        let file_size = 54u32 + row_size as u32 * th as u32;
+        let mut data = Vec::with_capacity(file_size as usize);
+        data.extend_from_slice(b"BM");
+        data.extend_from_slice(&file_size.to_le_bytes());
+        data.extend_from_slice(&0u32.to_le_bytes());
+        data.extend_from_slice(&54u32.to_le_bytes());
+        data.extend_from_slice(&40u32.to_le_bytes());
+        data.extend_from_slice(&(tw as i32).to_le_bytes());
+        data.extend_from_slice(&(th as i32).to_le_bytes());
+        data.extend_from_slice(&1u16.to_le_bytes());
+        data.extend_from_slice(&32u16.to_le_bytes());
+        data.extend_from_slice(&0u32.to_le_bytes());
+        data.extend_from_slice(&((row_size * th) as u32).to_le_bytes());
+        data.extend_from_slice(&0i32.to_le_bytes());
+        data.extend_from_slice(&0i32.to_le_bytes());
+        data.extend_from_slice(&0u32.to_le_bytes());
+        data.extend_from_slice(&0u32.to_le_bytes());
+        for row in 0..th as usize {
+            let start = row * (tw as usize * 4);
+            data.extend_from_slice(&bits[start..start + tw as usize * 4]);
+            data.extend(std::iter::repeat(0u8).take(row_size as usize - tw as usize * 4));
+        }
+        Some(data)
+    }
+}
+
+pub fn base64(data: &[u8]) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len() / 3 * 4 + 4);
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0];
+        let b1 = *chunk.get(1).unwrap_or(&0);
+        let b2 = *chunk.get(2).unwrap_or(&0);
+        out.push(T[(b0 >> 2) as usize] as char);
+        out.push(T[(((b0 & 3) << 4) | (b1 >> 4)) as usize] as char);
+        out.push(if chunk.len() > 1 {
+            T[(((b1 & 15) << 2) | (b2 >> 6)) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 { T[(b2 & 63) as usize] as char } else { '=' });
+    }
+    out
+}
+
 // taskmgr 等管理员程序受 UIPI 保护：非提权进程的钩子吞键被无视、SetForegroundWindow 被拒。
 // 检测当前进程是否提权，未提权则按配置自提升重启。
 // release 无控制台，stderr 无处可去；重定向到 %TEMP%\wintab.log 保证日志可查。

@@ -33,6 +33,10 @@ window.addEventListener("keydown", (e) => {
     settingsEl.hidden = !settingsOpen;
     return;
   }
+  if (e.key === "F11") {
+    invoke("toggle_fullscreen");
+    return;
+  }
   if (settingsOpen) {
     if (e.key === "Escape") {
       settingsOpen = false;
@@ -58,13 +62,52 @@ document.getElementById("settings-btn").addEventListener("click", () => {
 
 // 鼠标点击选择：复用键盘路径——程序层按字母、窗口层按编号
 listEl.addEventListener("click", (e) => {
-  const row = e.target.closest(".row");
+  const row = e.target.closest(".row, .wcard");
   if (!row) return;
   if (state && state.phase === "windows" && row.dataset.idx) {
     invoke("key", { k: "digit:" + row.dataset.idx });
   } else if (state && state.phase === "programs" && row.dataset.key) {
     invoke("key", { k: "letter:" + row.dataset.key });
   }
+});
+
+let thumbTimer = null;
+
+// 窗口层缩略图：进入窗口层时加载，每 2 秒刷新（win+tab 风格实时预览）
+async function loadThumbs() {
+  if (!state || state.phase !== "windows") return;
+  const cards = document.querySelectorAll(".wcard[data-hwnd]");
+  for (const card of cards) {
+    const img = card.querySelector("img.thumb");
+    if (!img) continue;
+    try {
+      const url = await invoke("window_thumbnail", {
+        hwnd: Number(card.dataset.hwnd),
+        maxW: 360,
+        maxH: 220,
+      });
+      img.src = url;
+    } catch (err) {
+      img.src = "";
+    }
+  }
+}
+
+function startThumbs() {
+  stopThumbs();
+  loadThumbs();
+  thumbTimer = setInterval(loadThumbs, 2000);
+}
+
+function stopThumbs() {
+  if (thumbTimer) {
+    clearInterval(thumbTimer);
+    thumbTimer = null;
+  }
+}
+
+document.getElementById("fullscreen-btn").addEventListener("click", () => {
+  invoke("toggle_fullscreen");
 });
 
 document.querySelectorAll('input[name="order"]').forEach((r) => {
@@ -87,23 +130,32 @@ function render(s) {
     appEl.style.display = "none";
     settingsOpen = false;
     settingsEl.hidden = true;
+    stopThumbs();
     return;
   }
   appEl.style.display = "block";
   renderSettings(s);
   if (s.phase === "windows") {
     titleEl.textContent = s.title;
+    listEl.className = "window-layer";
     listEl.innerHTML = s.windows
       .map(
         (w) =>
-          `<div class="row${w.active ? " active" : ""}" data-idx="${w.index}">` +
+          `<div class="wcard${w.active ? " active" : ""}" data-idx="${w.index}" data-hwnd="${w.hwnd}">` +
+          `<img class="thumb" alt="" />` +
+          `<div class="winfo">` +
           `<span class="key">${w.index}</span>` +
           `<span class="name">${escapeHtml(w.title)}</span>` +
           `<span class="screen">屏${w.screen + 1}</span>` +
+          `</div>` +
           `</div>`
       )
       .join("");
+    startThumbs();
   } else {
+    listEl.className = "";
+    stopThumbs();
+    titleEl.textContent = "WinTab";
     titleEl.textContent = "WinTab";
     listEl.innerHTML = s.programs
       .map(

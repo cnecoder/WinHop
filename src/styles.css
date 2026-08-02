@@ -165,3 +165,43 @@ body {
 .row.off .screen {
   color: var(--off);
 }
+
+/* 窗口层卡片（缩略图） */
+.window-layer {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 14px;
+  padding-top: 12px;
+}
+
+.wcard {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 8px;
+  cursor: pointer;
+}
+
+.wcard:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.wcard.active {
+  outline: 2px solid var(--accent);
+}
+
+.thumb {
+  width: 100%;
+  height: 120px;
+  object-fit: cover;
+  border-radius: 5px;
+  background: #111;
+  display: block;
+}
+
+.winfo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-top: 6px;
+}
