@@ -62,6 +62,12 @@ document.getElementById("settings-btn").addEventListener("click", () => {
 
 // 鼠标点击选择：复用键盘路径——程序层按字母、窗口层按编号
 listEl.addEventListener("click", (e) => {
+  const addBtn = e.target.closest(".add-btn");
+  if (addBtn) {
+    e.stopPropagation();
+    startAddProgram(addBtn);
+    return;
+  }
   const row = e.target.closest(".row, .wrow");
   if (!row) return;
   if (state && state.phase === "windows" && row.dataset.idx) {
@@ -70,6 +76,36 @@ listEl.addEventListener("click", (e) => {
     invoke("key", { k: "letter:" + row.dataset.key });
   }
 });
+
+// "+" 号：行内弹出字母输入框，Enter 确认入配置
+function startAddProgram(btn) {
+  const row = btn.closest(".row");
+  const input = document.createElement("input");
+  input.className = "key-input";
+  input.maxLength = 1;
+  input.placeholder = "字母";
+  input.addEventListener("keydown", (e) => {
+    e.stopPropagation();
+    if (e.key === "Enter" && input.value) {
+      const prog = state.programs.find((p) => p.key === row.dataset.key) || {};
+      invoke("add_program", {
+        key: input.value.toLowerCase(),
+        name: prog.name || "",
+        process: prog.process || "",
+      }).catch((err) => {
+        input.value = "";
+        input.placeholder = String(err);
+      });
+      // 成功后 Rust 会重建列表（该行变为已配置，+ 号消失）
+    } else if (e.key === "Escape") {
+      input.remove();
+      btn.style.display = "";
+    }
+  });
+  btn.style.display = "none";
+  btn.insertAdjacentElement("afterend", input);
+  input.focus();
+}
 
 let hoverIdx = null;
 let capturing = false;
@@ -187,8 +223,9 @@ function render(s) {
         (p) =>
           `<div class="row${p.active ? " active" : ""}${p.running ? "" : " off"}" data-key="${p.key}">` +
           `<span class="key">${p.key}</span>` +
-          `<span class="name">${escapeHtml(p.name)}</span>` +
+          `<span class="name">${escapeHtml(p.name)} (${escapeHtml(p.process)})</span>` +
           `<span class="screen">${p.running ? "×" + p.count : "未运行"}</span>` +
+          (p.configured ? "" : `<button class="add-btn" title="添加进配置">+</button>`) +
           `</div>`
       )
       .join("");

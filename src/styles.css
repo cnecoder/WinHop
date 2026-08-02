@@ -145,9 +145,37 @@ body {
 
 .name {
   flex: 1;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  word-break: break-all;
+  line-height: 1.35;
+}
+
+.add-btn {
+  background: none;
+  border: 1px solid rgba(76, 194, 255, 0.4);
+  color: var(--accent);
+  border-radius: 4px;
+  width: 22px;
+  height: 22px;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.add-btn:hover {
+  background: rgba(76, 194, 255, 0.2);
+}
+
+.key-input {
+  width: 46px;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid var(--accent);
+  color: var(--fg);
+  border-radius: 4px;
+  font-size: 14px;
+  text-align: center;
+  padding: 1px 0;
 }
 
 .screen {

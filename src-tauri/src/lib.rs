@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use config::Config;
+use config::{Config, Program};
 use serde::Serialize;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -27,6 +27,7 @@ struct ProgEntry {
     key: String,
     name: String,
     process: String,
+    configured: bool,
 }
 
 struct OverlayState {
@@ -73,9 +74,11 @@ struct Inner {
 struct ProgramUi {
     key: String,
     name: String,
+    process: String,
     running: bool,
     count: usize,
     active: bool,
+    configured: bool,
 }
 
 #[derive(Serialize, Clone)]
@@ -139,9 +142,11 @@ fn emit(app: &AppHandle, inner: &Inner, ov: &OverlayState) {
         render.programs.push(ProgramUi {
             key: p.key.clone(),
             name: p.name.clone(),
+            process: p.process.clone(),
             running: count > 0,
             count,
             active: i == ov.prog_sel,
+            configured: p.configured,
         });
     }
     drop(cfg);
@@ -158,6 +163,7 @@ fn build_prog_list(cfg: &Config, wins_by_proc: &HashMap<String, Vec<WinInfo>>) -
             key: p.key.clone(),
             name: p.name.clone(),
             process: p.process.clone(),
+            configured: true,
         });
     }
     let mut autos: Vec<&String> = wins_by_proc
@@ -179,6 +185,7 @@ fn build_prog_list(cfg: &Config, wins_by_proc: &HashMap<String, Vec<WinInfo>>) -
                 key: l.to_string(),
                 name,
                 process: proc.clone(),
+                configured: false,
             });
         } else {
             break; // 字母耗尽，不再补全
@@ -415,6 +422,38 @@ fn quit_app(app: AppHandle) {
     app.exit(0);
 }
 
+// 自动补全程序一键入配置：选字母 + 落盘 + 刷新覆盖层
+#[tauri::command]
+fn add_program(app: AppHandle, key: String, name: String, process: String) -> Result<(), String> {
+    let inner = app.state::<Inner>();
+    {
+        let mut cfg = inner.cfg.lock().unwrap();
+        if key.len() != 1 || !key.as_bytes()[0].is_ascii_lowercase() {
+            return Err("字母必须是单个小写字母".into());
+        }
+        if cfg.programs.iter().any(|p| p.key == key) {
+            return Err(format!("字母「{}」已被占用", key));
+        }
+        if cfg.programs.iter().any(|p| p.process == process) {
+            return Err("该程序已在配置中".into());
+        }
+        cfg.programs.push(Program {
+            key: key.clone(),
+            name,
+            process: process.clone(),
+        });
+        config::save(&cfg, &inner.cfg_path).map_err(|e| format!("保存配置失败: {}", e))?;
+    }
+    eprintln!("[t={}] 添加程序 {} ({})", windows::now_ms(), key, process);
+    if inner.visible.load(Ordering::Relaxed) {
+        let mut ov = inner.overlay.lock().unwrap();
+        let cfg = inner.cfg.lock().unwrap().clone();
+        ov.prog_list = build_prog_list(&cfg, &ov.wins_by_proc);
+        emit(&app, &inner, &ov);
+    }
+    Ok(())
+}
+
 // 设置界面：修改窗口排序方式，立即落盘
 #[tauri::command]
 fn set_window_order(app: AppHandle, order: String) -> Result<(), String> {
@@ -572,7 +611,8 @@ pub fn run() {
             set_window_order,
             quit_app,
             window_thumbnail,
-            toggle_fullscreen
+            toggle_fullscreen,
+            add_program
         ])
         .setup(move |app| {
             let visible = Arc::new(AtomicBool::new(false));
