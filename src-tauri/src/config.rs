@@ -31,10 +31,10 @@ pub fn load() -> (Config, std::path::PathBuf) {
     });
     let cwd = std::env::current_dir().ok();
     let mut candidates: Vec<std::path::PathBuf> = vec![];
-    if let Some(d) = exe_dir {
+    if let Some(d) = exe_dir.as_ref() {
         candidates.push(d.join("config.json"));
     }
-    if let Some(d) = cwd {
+    if let Some(d) = cwd.as_ref() {
         candidates.push(d.join("config.json"));
         if let Some(parent) = d.parent() {
             // dev 模式下 tauri CLI 在 src-tauri 下运行 cargo，配置放项目根目录
@@ -59,7 +59,32 @@ pub fn load() -> (Config, std::path::PathBuf) {
             return (cfg, path);
         }
     }
-    panic!("找不到 config.json（已查找 exe 目录、当前目录、项目根目录）");
+    // 找不到配置：生成默认配置（自动补全会填充程序列表，开箱即用）
+    let default = Config {
+        hotkey: "ctrl+space".into(),
+        elevate: true,
+        window_order: "zorder".into(),
+        programs: Vec::new(),
+    };
+    let json = serde_json::to_string_pretty(&default).expect("序列化默认配置失败");
+    let mut create_dirs: Vec<std::path::PathBuf> = vec![];
+    if let Some(d) = exe_dir {
+        create_dirs.push(d);
+    }
+    if let Some(d) = cwd {
+        create_dirs.push(d);
+    }
+    if let Ok(appdata) = std::env::var("APPDATA") {
+        create_dirs.push(std::path::PathBuf::from(appdata).join("WinTab"));
+    }
+    for dir in create_dirs {
+        let path = dir.join("config.json");
+        if std::fs::create_dir_all(&dir).is_ok() && std::fs::write(&path, &json).is_ok() {
+            eprintln!("[wintab] 已创建默认配置 {}", path.display());
+            return (default, path);
+        }
+    }
+    panic!("找不到且无法创建 config.json");
 }
 
 pub fn save(cfg: &Config, path: &std::path::Path) -> std::io::Result<()> {

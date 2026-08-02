@@ -33,6 +33,15 @@ Ctrl+Space（默认热键，可配置）
 - **管理员程序支持**（release 构建）：以提权运行，可切换 taskmgr 等 UIPI 保护的窗口
 - **单实例**：重复启动自动退出
 
+## 安装（其他电脑）
+
+从 GitHub Releases 下载：
+
+- **WinTab_0.1.0_x64-setup.exe**（NSIS 安装包，推荐）
+- 或 **WinTab_0.1.0_x64_en-US.msi**（MSI 安装包）
+
+安装后运行即可。首次启动弹 UAC 提权确认（切换管理员程序必需）。找不到 `config.json` 时自动生成默认配置（程序列表由自动补全填充，开箱即用）；配置放 exe 目录旁，复制即迁移。
+
 ## 构建与运行
 
 依赖：Rust（MSVC 工具链）、Node.js、WebView2（Win10 自带）。
@@ -40,7 +49,7 @@ Ctrl+Space（默认热键，可配置）
 ```bash
 npm install
 npm run tauri dev     # 开发模式（debug 构建，跳过提权）
-npm run tauri build   # 打包发布版
+npm run tauri build   # 打包发布版（生成 MSI + NSIS 安装包）
 ```
 
 release 版运行 `src-tauri/target/release/wintab.exe`（首次启动弹 UAC 提权确认）。
