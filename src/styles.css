@@ -1,8 +1,8 @@
 :root {
-  --bg: rgba(45, 45, 48, 0.8);
+  --bg: #000000;
   --fg: #e6e9f2;
   --dim: #9aa3b5;
-  --accent: #98c379;
+  --accent: #00ff66;
   --off: #5c6474;
 }
 
@@ -128,7 +128,7 @@ body {
 }
 
 .row.active {
-  background: rgba(152, 195, 121, 0.16);
+  background: rgba(0, 255, 102, 0.14);
   outline: 1px solid var(--accent);
 }
 
@@ -311,7 +311,7 @@ body {
 }
 
 .wrow.active {
-  background: rgba(152, 195, 121, 0.16);
+  background: rgba(0, 255, 102, 0.14);
   outline: 1px solid var(--accent);
 }
 
