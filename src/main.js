@@ -169,6 +169,7 @@ function startAddProgram(btn) {
 
 let hoverIdx = null;
 let capturing = false;
+let lastWinKey = null;
 
 // 缩略图捕获：DWM Thumbnail 管道（win+tab 同款），每个窗口独立捕获，
 // 颜色正确、重叠窗口互不影响、无闪烁。进入窗口层时捕获一次（静态）。
@@ -199,6 +200,12 @@ async function captureAll() {
   } finally {
     capturing = false;
   }
+}
+
+// 选中行自动滚动进可视区（窗口多时滚动条跟随选中）
+function scrollActiveIntoView() {
+  const active = listEl.querySelector(".wrow.active");
+  if (active) active.scrollIntoView({ block: "nearest" });
 }
 
 // 右侧大预览：复用行捕获图（目标 = 悬停行优先，否则选中行），不重复捕获
@@ -254,27 +261,39 @@ function render(s) {
   renderSettings(s);
   if (s.phase === "windows") {
     titleEl.textContent = s.title;
-    listEl.className = "window-layer";
-    listEl.innerHTML =
-      `<div class="wlist">` +
-      s.windows
-        .map(
-          (w) =>
-            `<div class="wrow${w.active ? " active" : ""}" data-idx="${w.index}" data-hwnd="${w.hwnd}">` +
-            `<div class="wtop">` +
-            `<span class="key">${w.index}</span>` +
-            `<span class="name">${escapeHtml(w.title)}</span>` +
-            `<span class="screen">屏${w.screen + 1}</span>` +
-            `</div>` +
-            `<img class="wthumb" alt="" />` +
-            `</div>`
-        )
-        .join("") +
-      `</div>` +
-      `<div class="wpreview"><img id="preview-img" alt="" /></div>`;
-    captureAll();
-    updatePreview();
+    const winKey = s.windows.map((w) => w.hwnd).join(",");
+    if (lastWinKey === winKey && listEl.querySelector(".wrow")) {
+      // 同一批窗口：只更新选中态，避免整列表重建导致预览闪烁
+      listEl.querySelectorAll(".wrow").forEach((row, i) => {
+        row.classList.toggle("active", !!(s.windows[i] && s.windows[i].active));
+      });
+      scrollActiveIntoView();
+      updatePreview();
+    } else {
+      lastWinKey = winKey;
+      listEl.className = "window-layer";
+      listEl.innerHTML =
+        `<div class="wlist">` +
+        s.windows
+          .map(
+            (w) =>
+              `<div class="wrow${w.active ? " active" : ""}" data-idx="${w.index}" data-hwnd="${w.hwnd}">` +
+              `<div class="wtop">` +
+              `<span class="key">${w.index}</span>` +
+              `<span class="name">${escapeHtml(w.title)}</span>` +
+              `<span class="screen">屏${w.screen + 1}</span>` +
+              `</div>` +
+              `<img class="wthumb" alt="" />` +
+              `</div>`
+          )
+          .join("") +
+        `</div>` +
+        `<div class="wpreview"><img id="preview-img" alt="" /></div>`;
+      captureAll();
+      updatePreview();
+    }
   } else {
+    lastWinKey = null;
     listEl.className = "";
     titleEl.textContent = "WinTab";
     titleEl.textContent = "WinTab";
