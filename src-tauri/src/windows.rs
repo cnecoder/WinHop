@@ -5,6 +5,7 @@ use windows_sys::Win32::Foundation::{
     CloseHandle, BOOL, GENERIC_WRITE, HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM, LRESULT, RECT,
     WPARAM, ERROR_ALREADY_EXISTS, GetLastError,
 };
+use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::Graphics::Gdi::EnumDisplayMonitors;
 use windows_sys::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_QUERY};
 use windows_sys::Win32::Storage::FileSystem::{
@@ -20,11 +21,10 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    BringWindowToTop, EnumWindows, GetClassNameW, GetForegroundWindow, GetWindowLongW,
-    GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindowVisible,
-    LWA_ALPHA, MSLLHOOKSTRUCT, SetForegroundWindow, SetLayeredWindowAttributes, SetWindowLongW,
-    SetWindowsHookExW, ShowWindow, SW_RESTORE, WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_RBUTTONDOWN,
-    WH_MOUSE_LL, WS_EX_LAYERED, GWL_EXSTYLE,
+    BringWindowToTop, EnumWindows, GetClassNameW, GetForegroundWindow, GetWindowRect,
+    GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindowVisible, MSLLHOOKSTRUCT,
+    SetForegroundWindow, SetWindowsHookExW, ShowWindow, SW_RESTORE, WM_LBUTTONDOWN, WM_MBUTTONDOWN,
+    WM_RBUTTONDOWN, WH_MOUSE_LL,
 };
 
 #[derive(Clone)]
@@ -54,17 +54,6 @@ struct MouseCtx {
 }
 
 static MOUSE_CTX: OnceLock<MouseCtx> = OnceLock::new();
-
-// 窗口级透明度（0-255）。DWM 即时生效，用于捕获前隐藏覆盖层。
-pub fn set_window_alpha(hwnd: isize, alpha: u8) {
-    unsafe {
-        let style = GetWindowLongW(hwnd as HWND, GWL_EXSTYLE);
-        if style & WS_EX_LAYERED as i32 == 0 {
-            SetWindowLongW(hwnd as HWND, GWL_EXSTYLE, style | WS_EX_LAYERED as i32);
-        }
-        SetLayeredWindowAttributes(hwnd as HWND, 0, alpha, LWA_ALPHA);
-    }
-}
 
 pub fn set_overlay_hwnd(hwnd: isize) {
     if let Some(ctx) = MOUSE_CTX.get() {
@@ -331,15 +320,59 @@ pub fn foreground() -> isize {
     unsafe { GetForegroundWindow() as isize }
 }
 
-// 屏幕直捕窗口内容，缩放后输出 BMP 字节（win+tab 风格缩略图）。
-// 不用 PrintWindow：Chromium 窗口（GPU 合成）的 PrintWindow 输出色彩反转/失真（实测）。
-// 调用方必须先隐藏覆盖层（窗口透明度 0），否则抓到的屏幕像素是覆盖层。
-// 屏幕 DC 覆盖虚拟屏幕（多显示器），窗口在哪个屏都能抓到。
+// DWM Thumbnail 捕获窗口内容（win+tab 同款管道）：
+// - 对 Chromium GPU 合成窗口颜色正确（PrintWindow 直抓会反转，实测）
+// - 每个窗口独立捕获，重叠/被遮挡也能拿到各自内容（屏幕直捕只能看到顶层窗口）
+// - 无需覆盖层隐藏（DWM 缩略图与窗口遮挡无关）
+// 流程：隐藏目标窗口 → DwmRegisterThumbnail → 等 DWM 合成 → PrintWindow 目标窗口读像素
+fn ensure_hidden_window() -> HWND {
+    unsafe {
+        static WINDOW: OnceLock<isize> = OnceLock::new();
+        *WINDOW.get_or_init(|| {
+            use windows_sys::Win32::UI::WindowsAndMessaging::{
+                CreateWindowExW, DefWindowProcW, RegisterClassExW, CS_HREDRAW, CS_VREDRAW,
+                WNDCLASSEXW, WS_POPUP,
+            };
+            let class = to_wide("WinTabThumbTarget");
+            let hinst = GetModuleHandleW(std::ptr::null());
+            let mut wc: WNDCLASSEXW = std::mem::zeroed();
+            wc.cbSize = std::mem::size_of::<WNDCLASSEXW>() as u32;
+            wc.hInstance = hinst;
+            wc.lpfnWndProc = Some(DefWindowProcW);
+            wc.lpszClassName = class.as_ptr();
+            wc.style = CS_HREDRAW | CS_VREDRAW;
+            RegisterClassExW(&wc);
+            CreateWindowExW(
+                0,
+                class.as_ptr(),
+                class.as_ptr(),
+                WS_POPUP,
+                0,
+                0,
+                1,
+                1,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                hinst,
+                std::ptr::null_mut(),
+            ) as isize
+        }) as HWND
+    }
+}
+
 pub fn capture_window(hwnd: isize, max_w: u32, max_h: u32) -> Option<Vec<u8>> {
     unsafe {
+        use windows_sys::Win32::Graphics::Dwm::{
+            DwmFlush, DwmRegisterThumbnail, DwmUnregisterThumbnail, DwmUpdateThumbnailProperties,
+            DWM_THUMBNAIL_PROPERTIES, DWM_TNP_OPACITY, DWM_TNP_RECTDESTINATION, DWM_TNP_VISIBLE,
+        };
         use windows_sys::Win32::Graphics::Gdi::{
-            BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDIBits,
-            GetDC, ReleaseDC, SelectObject, SRCCOPY, StretchBlt, BITMAPINFO, BITMAPINFOHEADER,
+            CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDIBits, GetDC,
+            ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER,
+        };
+        use windows_sys::Win32::Storage::Xps::PrintWindow;
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER, PW_RENDERFULLCONTENT,
         };
 
         let h = hwnd as HWND;
@@ -363,32 +396,57 @@ pub fn capture_window(hwnd: isize, max_w: u32, max_h: u32) -> Option<Vec<u8>> {
         let tw = (w as f64 * scale).max(1.0) as i32;
         let th = (hh as f64 * scale).max(1.0) as i32;
 
+        let target = ensure_hidden_window();
+        if target.is_null() {
+            return None;
+        }
+        SetWindowPos(
+            target,
+            std::ptr::null_mut(),
+            0,
+            0,
+            tw,
+            th,
+            SWP_NOZORDER | SWP_NOACTIVATE,
+        );
+
+        let mut hthumb: isize = 0;
+        if DwmRegisterThumbnail(target, h, &mut hthumb) < 0 || hthumb == 0 {
+            return None;
+        }
+        let props = DWM_THUMBNAIL_PROPERTIES {
+            dwFlags: DWM_TNP_RECTDESTINATION | DWM_TNP_VISIBLE | DWM_TNP_OPACITY,
+            rcDestination: RECT {
+                left: 0,
+                top: 0,
+                right: tw,
+                bottom: th,
+            },
+            rcSource: RECT {
+                left: 0,
+                top: 0,
+                right: w,
+                bottom: hh,
+            },
+            opacity: 255,
+            fVisible: 1,
+            fSourceClientAreaOnly: 0,
+        };
+        DwmUpdateThumbnailProperties(hthumb, &props);
+        DwmFlush();
+        // 等 DWM 合成首帧
+        std::thread::sleep(std::time::Duration::from_millis(40));
+
         let screen = GetDC(std::ptr::null_mut());
         let mem = CreateCompatibleDC(screen);
         let bmp = CreateCompatibleBitmap(screen, tw, th);
-        // BitBlt 不缩放：先抓完整窗口区域（w×hh），再 StretchBlt 缩到缩略图尺寸
-        let tmp_mem = CreateCompatibleDC(screen);
-        let tmp_bmp = CreateCompatibleBitmap(screen, w, hh);
-        if mem.is_null() || bmp.is_null() || tmp_mem.is_null() || tmp_bmp.is_null() {
-            ReleaseDC(std::ptr::null_mut(), screen);
+        ReleaseDC(std::ptr::null_mut(), screen);
+        let _ = DwmUnregisterThumbnail(hthumb);
+        if mem.is_null() || bmp.is_null() {
             return None;
         }
         let _old = SelectObject(mem, bmp);
-        let _old_tmp = SelectObject(tmp_mem, tmp_bmp);
-
-        // 屏幕 DC 必须在本 BitBlt 之后才释放
-        let ok = BitBlt(tmp_mem, 0, 0, w, hh, screen, rect.left, rect.top, SRCCOPY);
-        ReleaseDC(std::ptr::null_mut(), screen);
-        if ok == 0 {
-            DeleteObject(tmp_bmp);
-            DeleteDC(tmp_mem);
-            DeleteObject(bmp);
-            DeleteDC(mem);
-            return None;
-        }
-        StretchBlt(mem, 0, 0, tw, th, tmp_mem, 0, 0, w, hh, SRCCOPY);
-        DeleteObject(tmp_bmp);
-        DeleteDC(tmp_mem);
+        PrintWindow(target, mem, PW_RENDERFULLCONTENT);
 
         let mut bi = BITMAPINFO {
             bmiHeader: BITMAPINFOHEADER {

@@ -74,15 +74,12 @@ listEl.addEventListener("click", (e) => {
 let hoverIdx = null;
 let capturing = false;
 
-// 缩略图捕获：覆盖层窗口透明度置 0（露出桌面）→ 并行抓所有窗口 → 恢复。
-// 屏幕直捕是唯一对 Chromium 窗口颜色正确的路径（PrintWindow 输出反转，实测）。
-// 静态缩略图（进入窗口层时捕获一次）。
+// 缩略图捕获：DWM Thumbnail 管道（win+tab 同款），每个窗口独立捕获，
+// 颜色正确、重叠窗口互不影响、无闪烁。进入窗口层时捕获一次（静态）。
 async function captureAll() {
   if (capturing) return;
   capturing = true;
   try {
-    await invoke("set_overlay_opacity", { opacity: 0 });
-    await new Promise((r) => setTimeout(r, 80));
     const rows = [...document.querySelectorAll(".wrow[data-hwnd]")];
     const results = await Promise.all(
       rows.map(async (row) => {
@@ -104,7 +101,6 @@ async function captureAll() {
     }
     updatePreview();
   } finally {
-    await invoke("set_overlay_opacity", { opacity: 1 });
     capturing = false;
   }
 }
