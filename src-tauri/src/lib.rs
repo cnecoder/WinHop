@@ -3,7 +3,7 @@ mod windows;
 
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -217,8 +217,6 @@ fn open(app: &AppHandle) {
     ov.last_activated = 0;
     inner.prev_fg.store(windows::foreground(), Ordering::Relaxed);
     inner.visible.store(true, Ordering::Relaxed);
-    // 看门狗空闲计时从开层这一刻算起，否则热键开层会带着上次按键的旧时间戳被误判超时
-    LAST_KEY_MS.store(windows::now_ms(), Ordering::Relaxed);
     eprintln!(
         "[t={}] overlay open ({} programs)",
         windows::now_ms(),
@@ -373,8 +371,6 @@ fn resolve_window(inner: &Inner, ov: &mut OverlayState, n: usize) -> bool {
     true
 }
 
-static LAST_KEY_MS: AtomicU64 = AtomicU64::new(0);
-
 // webview JS keydown → 状态机。覆盖层夺焦后按键落在覆盖层内部，走这条路径
 #[tauri::command]
 fn key(app: AppHandle, k: String) {
@@ -475,7 +471,6 @@ fn set_window_order(app: AppHandle, order: String) -> Result<(), String> {
 }
 
 fn handle_key(app: &AppHandle, msg: HookMsg) {
-    LAST_KEY_MS.store(windows::now_ms(), Ordering::Relaxed);
     let inner = app.state::<Inner>();
     match msg {
         HookMsg::Hotkey => {
@@ -629,8 +624,9 @@ pub fn run() {
             // 鼠标钩子（点击外部关闭）；键盘走 RegisterHotKey + webview JS keydown
             windows::install_mouse_hook(visible, Box::new(move |msg| handle_key(&handle, msg)));
             app.global_shortcut().register(shortcut)?;
-            // 健康看门狗：检测隐形覆盖层（visible=true 但窗口不可见）与空闲卡死，
-            // 自动强制关闭并留日志，避免「无响应吞键」状态持续
+            // 健康看门狗：仅检测「隐形覆盖层」异常（visible=true 但窗口不可见）。
+            // 不做空闲自动退出：配置面板打字不经过状态机，定时退出会打断用户操作。
+            // 覆盖层只通过：热键 toggle / 选中窗口 / Esc / 点外部 关闭。
             let health_handle = app.handle().clone();
             std::thread::spawn(move || {
                 let mut last_fg: isize = 0;
@@ -651,23 +647,13 @@ pub fn run() {
                         continue;
                     }
                     let hwnd = windows::get_overlay_hwnd();
-                if hwnd != 0 && !windows::overlay_visible(hwnd) {
-                    eprintln!(
-                        "[t={}] 分叉检测：visible=true 但窗口不可见，强制关闭",
-                        windows::now_ms()
-                    );
-                    close(&health_handle);
-                    continue;
-                }
-                let idle = windows::now_ms().saturating_sub(LAST_KEY_MS.load(Ordering::Relaxed));
-                if idle > 20_000 {
-                    eprintln!(
-                        "[t={}] 空闲 {}ms 无按键，疑似卡死，强制关闭",
-                        windows::now_ms(),
-                        idle
-                    );
-                    close(&health_handle);
-                }
+                    if hwnd != 0 && !windows::overlay_visible(hwnd) {
+                        eprintln!(
+                            "[t={}] 分叉检测：visible=true 但窗口不可见，强制关闭",
+                            windows::now_ms()
+                        );
+                        close(&health_handle);
+                    }
                 }
             });
             // 托盘：鼠标路径不受任何键盘钩子影响，保证 taskmgr 等场景下仍可唤出
