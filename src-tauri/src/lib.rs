@@ -223,7 +223,7 @@ fn open(app: &AppHandle) {
         }
         let _ = win.show();
         // 整个覆盖层默认全屏（Win+Tab 风格选择页）
-        set_overlay_fullscreen(app, true);
+        set_overlay_fullscreen(app);
         // 覆盖层必须夺焦：否则前台是 Chromium 时按键走 raw input，谁也收不到。
         // 夺焦后按键落在覆盖层自己的 webview，由 JS keydown 接收（本窗口内部 raw input 可达）。
         let _ = win.set_focus();
@@ -246,7 +246,7 @@ fn close(app: &AppHandle) {
     let switched = ov.switched;
     drop(ov);
     windows::set_overlay_hwnd(0);
-    set_overlay_fullscreen(app, false);
+    // 先隐藏再处理尺寸：若先退全屏，面板会在屏幕上可见地缩小跳动（闪烁）
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.hide();
     }
@@ -275,21 +275,11 @@ fn close(app: &AppHandle) {
     let _ = app.emit("overlay", &render);
 }
 
-// 覆盖层窗口：程序层 720x520；窗口层默认全屏（Win+Tab 风格）
-fn set_overlay_fullscreen(app: &AppHandle, full: bool) {
+// 覆盖层整体全屏（Win+Tab 风格选择页）
+fn set_overlay_fullscreen(app: &AppHandle) {
     if let Some(win) = app.get_webview_window("main") {
-        if win.is_fullscreen().unwrap_or(false) != full {
-            let _ = win.set_fullscreen(full);
-        }
-        if !full {
-            let _ = win.set_size(tauri::PhysicalSize::new(720, 520));
-            if let Ok(Some(mon)) = win.primary_monitor() {
-                let pos = mon.position();
-                let size = mon.size();
-                let x = (pos.x + (size.width as i32 - 720) / 2).max(0);
-                let y = (pos.y + (size.height as i32 - 520) / 2).max(0);
-                let _ = win.set_position(PhysicalPosition::new(x, y));
-            }
+        if !win.is_fullscreen().unwrap_or(false) {
+            let _ = win.set_fullscreen(true);
         }
     }
 }
