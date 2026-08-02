@@ -166,42 +166,56 @@ body {
   color: var(--off);
 }
 
-/* 窗口层卡片（缩略图） */
+/* 窗口层：左列表 + 右侧大缩略图预览 */
 .window-layer {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 14px;
+  display: flex;
+  gap: 18px;
   padding-top: 12px;
 }
 
-.wcard {
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 8px;
-  padding: 8px;
+.wlist {
+  width: 400px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 480px;
+  overflow-y: auto;
+}
+
+.wrow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  font-size: 15px;
   cursor: pointer;
 }
 
-.wcard:hover {
-  background: rgba(255, 255, 255, 0.1);
+.wrow.active {
+  background: rgba(76, 194, 255, 0.16);
+  outline: 1px solid var(--accent);
 }
 
-.wcard.active {
-  outline: 2px solid var(--accent);
+.wrow:hover {
+  background: rgba(255, 255, 255, 0.08);
 }
 
-.thumb {
-  width: 100%;
-  height: 120px;
-  object-fit: cover;
-  border-radius: 5px;
-  background: #111;
-  display: block;
-}
-
-.winfo {
+.wpreview {
+  flex: 1;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding-top: 6px;
+  justify-content: center;
+  min-height: 380px;
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.wpreview img {
+  max-width: 96%;
+  max-height: 400px;
+  border-radius: 6px;
+  box-shadow: 0 10px 36px rgba(0, 0, 0, 0.55);
 }

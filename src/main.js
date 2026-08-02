@@ -62,7 +62,7 @@ document.getElementById("settings-btn").addEventListener("click", () => {
 
 // 鼠标点击选择：复用键盘路径——程序层按字母、窗口层按编号
 listEl.addEventListener("click", (e) => {
-  const row = e.target.closest(".row, .wcard");
+  const row = e.target.closest(".row, .wrow");
   if (!row) return;
   if (state && state.phase === "windows" && row.dataset.idx) {
     invoke("key", { k: "digit:" + row.dataset.idx });
@@ -72,31 +72,36 @@ listEl.addEventListener("click", (e) => {
 });
 
 let thumbTimer = null;
+let hoverIdx = null;
 
-// 窗口层缩略图：进入窗口层时加载，每 2 秒刷新（win+tab 风格实时预览）
-async function loadThumbs() {
+// 右侧大缩略图预览：目标 = 悬停行（优先）或当前选中行，每 2 秒刷新
+async function loadPreview() {
   if (!state || state.phase !== "windows") return;
-  const cards = document.querySelectorAll(".wcard[data-hwnd]");
-  for (const card of cards) {
-    const img = card.querySelector("img.thumb");
-    if (!img) continue;
-    try {
-      const url = await invoke("window_thumbnail", {
-        hwnd: Number(card.dataset.hwnd),
-        maxW: 360,
-        maxH: 220,
-      });
-      img.src = url;
-    } catch (err) {
-      img.src = "";
-    }
+  const idx = hoverIdx !== null ? hoverIdx : state.windows.findIndex((w) => w.active);
+  const target = state.windows[Math.max(0, idx)];
+  if (!target) return;
+  const img = document.getElementById("preview-img");
+  if (!img) return;
+  if (img.dataset.hwnd !== String(target.hwnd)) {
+    img.dataset.hwnd = String(target.hwnd);
+    img.src = "";
+  }
+  try {
+    const url = await invoke("window_thumbnail", {
+      hwnd: target.hwnd,
+      maxW: 640,
+      maxH: 420,
+    });
+    if (img.dataset.hwnd === String(target.hwnd)) img.src = url;
+  } catch (err) {
+    img.src = "";
   }
 }
 
 function startThumbs() {
   stopThumbs();
-  loadThumbs();
-  thumbTimer = setInterval(loadThumbs, 2000);
+  loadPreview();
+  thumbTimer = setInterval(loadPreview, 2000);
 }
 
 function stopThumbs() {
@@ -105,6 +110,21 @@ function stopThumbs() {
     thumbTimer = null;
   }
 }
+
+// 悬停联动：鼠标移入某行预览该窗口，移出列表回到选中行
+listEl.addEventListener("mouseover", (e) => {
+  const row = e.target.closest(".wrow");
+  if (!row || !state || state.phase !== "windows") return;
+  hoverIdx = Number(row.dataset.idx) - 1;
+  loadPreview();
+});
+
+listEl.addEventListener("mouseleave", () => {
+  if (hoverIdx !== null) {
+    hoverIdx = null;
+    loadPreview();
+  }
+});
 
 document.getElementById("fullscreen-btn").addEventListener("click", () => {
   invoke("toggle_fullscreen");
@@ -138,19 +158,20 @@ function render(s) {
   if (s.phase === "windows") {
     titleEl.textContent = s.title;
     listEl.className = "window-layer";
-    listEl.innerHTML = s.windows
-      .map(
-        (w) =>
-          `<div class="wcard${w.active ? " active" : ""}" data-idx="${w.index}" data-hwnd="${w.hwnd}">` +
-          `<img class="thumb" alt="" />` +
-          `<div class="winfo">` +
-          `<span class="key">${w.index}</span>` +
-          `<span class="name">${escapeHtml(w.title)}</span>` +
-          `<span class="screen">屏${w.screen + 1}</span>` +
-          `</div>` +
-          `</div>`
-      )
-      .join("");
+    listEl.innerHTML =
+      `<div class="wlist">` +
+      s.windows
+        .map(
+          (w) =>
+            `<div class="wrow${w.active ? " active" : ""}" data-idx="${w.index}" data-hwnd="${w.hwnd}">` +
+            `<span class="key">${w.index}</span>` +
+            `<span class="name">${escapeHtml(w.title)}</span>` +
+            `<span class="screen">屏${w.screen + 1}</span>` +
+            `</div>`
+        )
+        .join("") +
+      `</div>` +
+      `<div class="wpreview"><img id="preview-img" alt="" /></div>`;
     startThumbs();
   } else {
     listEl.className = "";

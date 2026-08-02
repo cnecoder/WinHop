@@ -244,6 +244,7 @@ fn close(app: &AppHandle) {
     let switched = ov.switched;
     drop(ov);
     windows::set_overlay_hwnd(0);
+    resize_overlay(app, 720, 520);
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.hide();
     }
@@ -270,6 +271,20 @@ fn close(app: &AppHandle) {
         windows: Vec::new(),
     };
     let _ = app.emit("overlay", &render);
+}
+
+// 覆盖层窗口尺寸：程序层 720x520，窗口层加宽给右侧缩略图预览留空间
+fn resize_overlay(app: &AppHandle, w: u32, h: u32) {
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.set_size(tauri::PhysicalSize::new(w, h));
+        if let Ok(Some(mon)) = win.primary_monitor() {
+            let pos = mon.position();
+            let size = mon.size();
+            let x = (pos.x + (size.width as i32 - w as i32) / 2).max(0);
+            let y = (pos.y + (size.height as i32 - h as i32) / 2).max(0);
+            let _ = win.set_position(PhysicalPosition::new(x, y));
+        }
+    }
 }
 
 // 激活操作延迟到钩子回调之外执行：回调内严禁阻塞（超时会被 Windows 静默卸载钩子）
@@ -321,6 +336,7 @@ fn select_entry(app: &AppHandle, inner: &Inner, ov: &mut OverlayState, entry: &P
         ov.wins = wins;
         ov.active = 0;
         ov.digit_buf.clear();
+        resize_overlay(app, 1100, 620);
         eprintln!("[wintab] '{}' -> {} 窗口数 {}", entry.key, entry.name, ov.wins.len());
         emit(app, inner, ov);
         false
@@ -447,6 +463,7 @@ fn handle_key(app: &AppHandle, msg: HookMsg) {
                 ov.phase = Phase::Programs;
                 ov.sel_proc = None;
                 ov.digit_buf.clear();
+                resize_overlay(app, 720, 520);
                 emit(app, &inner, &ov);
             }
             Phase::Programs => {
