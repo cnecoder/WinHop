@@ -169,7 +169,12 @@ fn build_prog_list(cfg: &Config, wins_by_proc: &HashMap<String, Vec<WinInfo>>) -
         let letter = ('a'..='z').find(|c| !used.contains(&c.to_string()));
         if let Some(l) = letter {
             used.insert(l.to_string());
-            let name = proc.trim_end_matches(".exe").to_string();
+            // 显示名优先取 exe 版本资源的 FileDescription（如 msedge.exe → Microsoft Edge）
+            let name = wins_by_proc
+                .get(proc)
+                .and_then(|wins| wins.first())
+                .and_then(|w| windows::file_description(&w.path))
+                .unwrap_or_else(|| proc.trim_end_matches(".exe").to_string());
             list.push(ProgEntry {
                 key: l.to_string(),
                 name,

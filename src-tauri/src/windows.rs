@@ -31,6 +31,7 @@ pub struct WinInfo {
     pub hwnd: isize,
     pub title: String,
     pub process: String,
+    pub path: String,
     pub monitor: u32,
 }
 
@@ -170,10 +171,12 @@ unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
         return 1;
     }
     let ctx = &mut *(lparam as *mut EnumCtx);
+    let (process, path) = process_name(hwnd);
     ctx.out.push(WinInfo {
         hwnd: hwnd as isize,
         title,
-        process: process_name(hwnd),
+        process,
+        path,
         monitor: monitor_index(hwnd, &ctx.monitors),
     });
     1
@@ -185,26 +188,88 @@ fn window_title(hwnd: HWND) -> String {
     String::from_utf16_lossy(&buf[..len.max(0) as usize])
 }
 
-fn process_name(hwnd: HWND) -> String {
+// 返回 (小写 exe 文件名, 完整 exe 路径)
+fn process_name(hwnd: HWND) -> (String, String) {
     unsafe {
         let mut pid: u32 = 0;
         GetWindowThreadProcessId(hwnd, &mut pid);
         if pid == 0 {
-            return String::new();
+            return (String::new(), String::new());
         }
         let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
         if handle.is_null() {
-            return String::new();
+            return (String::new(), String::new());
         }
         let mut buf = [0u16; 1024];
         let mut size = buf.len() as u32;
         let ok = QueryFullProcessImageNameW(handle, 0, buf.as_mut_ptr(), &mut size);
         CloseHandle(handle);
         if ok == 0 {
-            return String::new();
+            return (String::new(), String::new());
         }
         let path = String::from_utf16_lossy(&buf[..size as usize]);
-        path.rsplit('\\').next().unwrap_or("").to_lowercase()
+        let stem = path.rsplit('\\').next().unwrap_or("").to_lowercase();
+        (stem, path)
+    }
+}
+
+// exe 版本资源里的显示名（FileDescription，回退 ProductName）
+pub fn file_description(path: &str) -> Option<String> {
+    unsafe {
+        use windows_sys::Win32::Storage::FileSystem::{
+            GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW,
+        };
+        let wide = to_wide(path);
+        let size = GetFileVersionInfoSizeW(wide.as_ptr(), std::ptr::null_mut());
+        if size == 0 {
+            return None;
+        }
+        let mut buf = vec![0u8; size as usize];
+        if GetFileVersionInfoW(wide.as_ptr(), 0, size, buf.as_mut_ptr() as *mut c_void) == 0 {
+            return None;
+        }
+        // 从 Translation 确定语言/代码页
+        let mut lang = 0x0409u16;
+        let mut cp = 0x04B0u16;
+        let trans_key = to_wide("\\VarFileInfo\\Translation");
+        let mut trans: *mut c_void = std::ptr::null_mut();
+        let mut trans_len: u32 = 0;
+        if VerQueryValueW(
+            buf.as_mut_ptr() as *mut c_void,
+            trans_key.as_ptr(),
+            &mut trans,
+            &mut trans_len,
+        ) != 0
+            && !trans.is_null()
+            && trans_len >= 4
+        {
+            let t = std::slice::from_raw_parts(trans as *const u8, 4);
+            lang = (t[0] as u16) | ((t[1] as u16) << 8);
+            cp = (t[2] as u16) | ((t[3] as u16) << 8);
+        }
+        for key in ["FileDescription", "ProductName"] {
+            let path_str = format!("\\StringFileInfo\\{:04X}{:04X}\\{}", lang, cp, key);
+            let key_wide = to_wide(&path_str);
+            let mut val: *mut c_void = std::ptr::null_mut();
+            let mut val_len: u32 = 0;
+            if VerQueryValueW(
+                buf.as_mut_ptr() as *mut c_void,
+                key_wide.as_ptr(),
+                &mut val,
+                &mut val_len,
+            ) != 0
+                && !val.is_null()
+                && val_len > 0
+            {
+                let s = std::slice::from_raw_parts(val as *const u16, (val_len as usize) / 2);
+                let s = String::from_utf16_lossy(s);
+                let s = s.trim_end_matches('\0').trim().to_string();
+                if !s.is_empty() {
+                    return Some(s);
+                }
+            }
+        }
+        None
     }
 }
 
