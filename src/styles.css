@@ -183,16 +183,19 @@ body {
   outline: 1px solid #ff6b6b;
 }
 
-.row.adding {
-  flex-wrap: wrap;
+.add-panel {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 10px 6px 50px;
 }
 
 .free-hint {
-  width: 100%;
+  flex: 1;
   font-size: 12px;
   color: var(--dim);
-  padding-left: 50px;
   line-height: 1.6;
+  word-break: break-all;
 }
 
 .free-hint b {

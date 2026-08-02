@@ -27,6 +27,8 @@ function renderSettings(state) {
 // 覆盖层夺焦后按键落在本 webview 内部（raw input 内部可达），路由给 Rust 状态机。
 // LL 键盘钩子对 Chromium 前台无效（raw input 绕过钩子链），这是唯一的按键路径。
 window.addEventListener("keydown", (e) => {
+  // 输入框（+ 号配置字母）按键不参与快捷键路由
+  if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
   e.preventDefault();
   if (e.key === "F2") {
     settingsOpen = !settingsOpen;
@@ -77,11 +79,13 @@ listEl.addEventListener("click", (e) => {
   }
 });
 
-// "+" 号：行内弹出字母输入框 + 可用字母提示，Enter 确认入配置
+// "+" 号：行下方弹出整行面板（字母输入框 + 可用字母提示），Enter 确认入配置
 function startAddProgram(btn) {
   const row = btn.closest(".row");
-  row.classList.add("adding");
   const prog = state.programs.find((p) => p.key === row.dataset.key) || {};
+
+  const panel = document.createElement("div");
+  panel.className = "add-panel";
 
   const input = document.createElement("input");
   input.className = "key-input";
@@ -126,16 +130,15 @@ function startAddProgram(btn) {
     if (e.key === "Enter") {
       confirmAdd();
     } else if (e.key === "Escape") {
-      input.remove();
-      hint.remove();
-      row.classList.remove("adding");
+      panel.remove();
       btn.style.display = "";
     }
   });
 
+  panel.appendChild(input);
+  panel.appendChild(hint);
   btn.style.display = "none";
-  btn.insertAdjacentElement("afterend", input);
-  input.insertAdjacentElement("afterend", hint);
+  row.insertAdjacentElement("afterend", panel);
   input.focus();
 }
 
