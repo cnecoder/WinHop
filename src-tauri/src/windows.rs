@@ -339,7 +339,7 @@ pub fn capture_window(hwnd: isize, max_w: u32, max_h: u32) -> Option<Vec<u8>> {
     unsafe {
         use windows_sys::Win32::Graphics::Gdi::{
             BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDIBits,
-            GetDC, ReleaseDC, SelectObject, SRCCOPY, BITMAPINFO, BITMAPINFOHEADER,
+            GetDC, ReleaseDC, SelectObject, SRCCOPY, StretchBlt, BITMAPINFO, BITMAPINFOHEADER,
         };
 
         let h = hwnd as HWND;
@@ -366,20 +366,29 @@ pub fn capture_window(hwnd: isize, max_w: u32, max_h: u32) -> Option<Vec<u8>> {
         let screen = GetDC(std::ptr::null_mut());
         let mem = CreateCompatibleDC(screen);
         let bmp = CreateCompatibleBitmap(screen, tw, th);
-        if mem.is_null() || bmp.is_null() {
+        // BitBlt 不缩放：先抓完整窗口区域（w×hh），再 StretchBlt 缩到缩略图尺寸
+        let tmp_mem = CreateCompatibleDC(screen);
+        let tmp_bmp = CreateCompatibleBitmap(screen, w, hh);
+        if mem.is_null() || bmp.is_null() || tmp_mem.is_null() || tmp_bmp.is_null() {
             ReleaseDC(std::ptr::null_mut(), screen);
             return None;
         }
         let _old = SelectObject(mem, bmp);
+        let _old_tmp = SelectObject(tmp_mem, tmp_bmp);
 
         // 屏幕 DC 必须在本 BitBlt 之后才释放
-        let ok = BitBlt(mem, 0, 0, tw, th, screen, rect.left, rect.top, SRCCOPY);
+        let ok = BitBlt(tmp_mem, 0, 0, w, hh, screen, rect.left, rect.top, SRCCOPY);
         ReleaseDC(std::ptr::null_mut(), screen);
         if ok == 0 {
+            DeleteObject(tmp_bmp);
+            DeleteDC(tmp_mem);
             DeleteObject(bmp);
             DeleteDC(mem);
             return None;
         }
+        StretchBlt(mem, 0, 0, tw, th, tmp_mem, 0, 0, w, hh, SRCCOPY);
+        DeleteObject(tmp_bmp);
+        DeleteDC(tmp_mem);
 
         let mut bi = BITMAPINFO {
             bmiHeader: BITMAPINFOHEADER {
