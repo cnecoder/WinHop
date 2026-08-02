@@ -71,86 +71,68 @@ listEl.addEventListener("click", (e) => {
   }
 });
 
-let thumbTimer = null;
 let hoverIdx = null;
+let capturing = false;
 
-// 左侧行小缩略图：每行一个，2 秒刷新
-async function loadThumbs() {
-  if (!state || state.phase !== "windows") return;
-  const rows = document.querySelectorAll(".wrow[data-hwnd]");
-  for (const row of rows) {
-    const img = row.querySelector("img.wthumb");
-    if (!img) continue;
-    if (img.dataset.hwnd !== row.dataset.hwnd) {
-      img.dataset.hwnd = row.dataset.hwnd;
-      img.src = "";
+// 缩略图捕获：覆盖层窗口透明度置 0（露出桌面）→ 并行抓所有窗口 → 恢复。
+// 屏幕直捕是唯一对 Chromium 窗口颜色正确的路径（PrintWindow 输出反转，实测）。
+// 静态缩略图（进入窗口层时捕获一次）。
+async function captureAll() {
+  if (capturing) return;
+  capturing = true;
+  try {
+    await invoke("set_overlay_opacity", { opacity: 0 });
+    await new Promise((r) => setTimeout(r, 80));
+    const rows = [...document.querySelectorAll(".wrow[data-hwnd]")];
+    const results = await Promise.all(
+      rows.map(async (row) => {
+        try {
+          const url = await invoke("window_thumbnail", {
+            hwnd: Number(row.dataset.hwnd),
+            maxW: 960,
+            maxH: 540,
+          });
+          return { row, url };
+        } catch (err) {
+          return { row, url: "" };
+        }
+      })
+    );
+    for (const { row, url } of results) {
+      const img = row.querySelector("img.wthumb");
+      if (img) img.src = url;
     }
-    try {
-      const url = await invoke("window_thumbnail", {
-        hwnd: Number(row.dataset.hwnd),
-        maxW: 160,
-        maxH: 100,
-      });
-      if (img.dataset.hwnd === row.dataset.hwnd) img.src = url;
-    } catch (err) {
-      img.src = "";
-    }
+    updatePreview();
+  } finally {
+    await invoke("set_overlay_opacity", { opacity: 1 });
+    capturing = false;
   }
 }
 
-// 右侧大缩略图预览：目标 = 悬停行（优先）或当前选中行，每 2 秒刷新
-async function loadPreview() {
-  if (!state || state.phase !== "windows") return;
+// 右侧大预览：复用行捕获图（目标 = 悬停行优先，否则选中行），不重复捕获
+function updatePreview() {
+  const img = document.getElementById("preview-img");
+  if (!img || !state || state.phase !== "windows") return;
   const idx = hoverIdx !== null ? hoverIdx : state.windows.findIndex((w) => w.active);
   const target = state.windows[Math.max(0, idx)];
   if (!target) return;
-  const img = document.getElementById("preview-img");
-  if (!img) return;
-  if (img.dataset.hwnd !== String(target.hwnd)) {
-    img.dataset.hwnd = String(target.hwnd);
-    img.src = "";
-  }
-  try {
-    const url = await invoke("window_thumbnail", {
-      hwnd: target.hwnd,
-      maxW: 640,
-      maxH: 420,
-    });
-    if (img.dataset.hwnd === String(target.hwnd)) img.src = url;
-  } catch (err) {
-    img.src = "";
-  }
+  const row = document.querySelector(`.wrow[data-idx="${target.index}"]`);
+  const src = row ? row.querySelector("img.wthumb").src : "";
+  if (img.src !== src) img.src = src;
 }
 
-function startThumbs() {
-  stopThumbs();
-  loadThumbs();
-  loadPreview();
-  thumbTimer = setInterval(() => {
-    loadThumbs();
-    loadPreview();
-  }, 2000);
-}
-
-function stopThumbs() {
-  if (thumbTimer) {
-    clearInterval(thumbTimer);
-    thumbTimer = null;
-  }
-}
-
-// 悬停联动：鼠标移入某行预览该窗口，移出列表回到选中行
+// 悬停联动：预览跟随悬停行
 listEl.addEventListener("mouseover", (e) => {
   const row = e.target.closest(".wrow");
   if (!row || !state || state.phase !== "windows") return;
   hoverIdx = Number(row.dataset.idx) - 1;
-  loadPreview();
+  updatePreview();
 });
 
 listEl.addEventListener("mouseleave", () => {
   if (hoverIdx !== null) {
     hoverIdx = null;
-    loadPreview();
+    updatePreview();
   }
 });
 
@@ -174,7 +156,6 @@ function render(s) {
     appEl.style.display = "none";
     settingsOpen = false;
     settingsEl.hidden = true;
-    stopThumbs();
     return;
   }
   appEl.style.display = "block";
@@ -199,10 +180,10 @@ function render(s) {
         .join("") +
       `</div>` +
       `<div class="wpreview"><img id="preview-img" alt="" /></div>`;
-    startThumbs();
+    captureAll();
+    updatePreview();
   } else {
     listEl.className = "";
-    stopThumbs();
     titleEl.textContent = "WinTab";
     titleEl.textContent = "WinTab";
     listEl.innerHTML = s.programs

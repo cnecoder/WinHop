@@ -404,6 +404,16 @@ async fn window_thumbnail(hwnd: isize, max_w: u32, max_h: u32) -> Result<String,
     Ok(format!("data:image/bmp;base64,{}", windows::base64(&bmp)))
 }
 
+// 捕获瞬间把覆盖层窗口透明度置 0（DWM 级即时生效），屏幕直捕完再恢复
+#[tauri::command]
+async fn set_overlay_opacity(app: AppHandle, opacity: f64) {
+    if let Some(win) = app.get_webview_window("main") {
+        if let Ok(hwnd) = win.hwnd() {
+            windows::set_window_alpha(hwnd.0 as isize, (opacity.clamp(0.0, 1.0) * 255.0) as u8);
+        }
+    }
+}
+
 #[tauri::command]
 async fn toggle_fullscreen(app: AppHandle) {
     if let Some(win) = app.get_webview_window("main") {
@@ -577,7 +587,8 @@ pub fn run() {
             set_window_order,
             quit_app,
             window_thumbnail,
-            toggle_fullscreen
+            toggle_fullscreen,
+            set_overlay_opacity
         ])
         .setup(move |app| {
             let visible = Arc::new(AtomicBool::new(false));

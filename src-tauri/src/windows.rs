@@ -20,10 +20,11 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    BringWindowToTop, EnumWindows, GetClassNameW, GetForegroundWindow, GetWindowRect,
-    GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindowVisible, MSLLHOOKSTRUCT,
-    SetForegroundWindow, SetWindowsHookExW, ShowWindow, SW_RESTORE, WM_LBUTTONDOWN, WM_MBUTTONDOWN,
-    WM_RBUTTONDOWN, WH_MOUSE_LL,
+    BringWindowToTop, EnumWindows, GetClassNameW, GetForegroundWindow, GetWindowLongW,
+    GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindowVisible,
+    LWA_ALPHA, MSLLHOOKSTRUCT, SetForegroundWindow, SetLayeredWindowAttributes, SetWindowLongW,
+    SetWindowsHookExW, ShowWindow, SW_RESTORE, WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_RBUTTONDOWN,
+    WH_MOUSE_LL, WS_EX_LAYERED, GWL_EXSTYLE,
 };
 
 #[derive(Clone)]
@@ -53,6 +54,17 @@ struct MouseCtx {
 }
 
 static MOUSE_CTX: OnceLock<MouseCtx> = OnceLock::new();
+
+// 窗口级透明度（0-255）。DWM 即时生效，用于捕获前隐藏覆盖层。
+pub fn set_window_alpha(hwnd: isize, alpha: u8) {
+    unsafe {
+        let style = GetWindowLongW(hwnd as HWND, GWL_EXSTYLE);
+        if style & WS_EX_LAYERED as i32 == 0 {
+            SetWindowLongW(hwnd as HWND, GWL_EXSTYLE, style | WS_EX_LAYERED as i32);
+        }
+        SetLayeredWindowAttributes(hwnd as HWND, 0, alpha, LWA_ALPHA);
+    }
+}
 
 pub fn set_overlay_hwnd(hwnd: isize) {
     if let Some(ctx) = MOUSE_CTX.get() {
@@ -319,17 +331,16 @@ pub fn foreground() -> isize {
     unsafe { GetForegroundWindow() as isize }
 }
 
-// PrintWindow 捕获窗口内容，缩放后输出 BMP 字节（win+tab 风格缩略图）。
-// 注意：非提权进程捕获提权窗口会得到空白（UIPI）。
+// 屏幕直捕窗口内容，缩放后输出 BMP 字节（win+tab 风格缩略图）。
+// 不用 PrintWindow：Chromium 窗口（GPU 合成）的 PrintWindow 输出色彩反转/失真（实测）。
+// 调用方必须先隐藏覆盖层（窗口透明度 0），否则抓到的屏幕像素是覆盖层。
+// 屏幕 DC 覆盖虚拟屏幕（多显示器），窗口在哪个屏都能抓到。
 pub fn capture_window(hwnd: isize, max_w: u32, max_h: u32) -> Option<Vec<u8>> {
     unsafe {
         use windows_sys::Win32::Graphics::Gdi::{
-            CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDIBits,
-            GetWindowDC, ReleaseDC, SelectObject, SRCCOPY, StretchBlt, BITMAPINFO,
-            BITMAPINFOHEADER,
+            BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDIBits,
+            GetDC, ReleaseDC, SelectObject, SRCCOPY, BITMAPINFO, BITMAPINFOHEADER,
         };
-        use windows_sys::Win32::Storage::Xps::PrintWindow;
-        use windows_sys::Win32::UI::WindowsAndMessaging::PW_RENDERFULLCONTENT;
 
         let h = hwnd as HWND;
         let mut rect = RECT {
@@ -352,20 +363,21 @@ pub fn capture_window(hwnd: isize, max_w: u32, max_h: u32) -> Option<Vec<u8>> {
         let tw = (w as f64 * scale).max(1.0) as i32;
         let th = (hh as f64 * scale).max(1.0) as i32;
 
-        let screen = GetWindowDC(std::ptr::null_mut());
-        let full_mem = CreateCompatibleDC(screen);
-        let full_bmp = CreateCompatibleBitmap(screen, w, hh);
-        let thumb_mem = CreateCompatibleDC(screen);
-        let thumb_bmp = CreateCompatibleBitmap(screen, tw, th);
+        let screen = GetDC(std::ptr::null_mut());
+        let mem = CreateCompatibleDC(screen);
+        let bmp = CreateCompatibleBitmap(screen, tw, th);
         ReleaseDC(std::ptr::null_mut(), screen);
-        if full_mem.is_null() || thumb_mem.is_null() || full_bmp.is_null() || thumb_bmp.is_null() {
+        if mem.is_null() || bmp.is_null() {
             return None;
         }
-        let _old_full = SelectObject(full_mem, full_bmp);
-        let _old_thumb = SelectObject(thumb_mem, thumb_bmp);
+        let _old = SelectObject(mem, bmp);
 
-        PrintWindow(h, full_mem, PW_RENDERFULLCONTENT);
-        StretchBlt(thumb_mem, 0, 0, tw, th, full_mem, 0, 0, w, hh, SRCCOPY);
+        let ok = BitBlt(mem, 0, 0, tw, th, screen, rect.left, rect.top, SRCCOPY);
+        if ok == 0 {
+            DeleteObject(bmp);
+            DeleteDC(mem);
+            return None;
+        }
 
         let mut bi = BITMAPINFO {
             bmiHeader: BITMAPINFOHEADER {
@@ -385,8 +397,8 @@ pub fn capture_window(hwnd: isize, max_w: u32, max_h: u32) -> Option<Vec<u8>> {
         };
         let mut bits = vec![0u8; (tw * th * 4) as usize];
         GetDIBits(
-            thumb_mem,
-            thumb_bmp,
+            mem,
+            bmp,
             0,
             th as u32,
             bits.as_mut_ptr() as *mut c_void,
@@ -398,10 +410,8 @@ pub fn capture_window(hwnd: isize, max_w: u32, max_h: u32) -> Option<Vec<u8>> {
             px[3] = 255;
         }
 
-        DeleteObject(full_bmp);
-        DeleteObject(thumb_bmp);
-        DeleteDC(full_mem);
-        DeleteDC(thumb_mem);
+        DeleteObject(bmp);
+        DeleteDC(mem);
 
         // 组装 BMP：54 字节头 + 每行 4 字节对齐的 BGRA 像素
         let row_size = ((tw * 4 + 3) / 4) * 4;
