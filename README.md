@@ -66,7 +66,7 @@ release 版运行 `src-tauri/target/release/wintab.exe`（首次启动弹 UAC �
 |---|---|
 | `hotkey` | 全局热键，格式 `修饰键+按键`：ctrl/alt/shift/win + space/esc/enter/tab/字母/数字 |
 | `elevate` | release 构建是否提权运行（切换管理员程序必需，debug 构建忽略） |
-| `window_order` | 窗口层排序：`zorder` 固定序号（堆叠顺序）/ `mru` 最近使用优先（上次用的排 1）。可在设置界面改，运行时落盘 |
+| `window_order` | 窗口层排序：`zorder` 固定序号（按创建顺序，不受使用影响）/ `mru` 最近使用优先（上次用的排 1）。可在设置界面改，运行时落盘 |
 | `programs[]` | 程序条目：`key` 单字母代号（不重复）、`name` 显示名、`process` exe 文件名 |
 
 ## 输入架构（为什么这样设计）

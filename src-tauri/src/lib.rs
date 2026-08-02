@@ -203,6 +203,8 @@ fn open(app: &AppHandle) {
     ov.last_activated = 0;
     inner.prev_fg.store(windows::foreground(), Ordering::Relaxed);
     inner.visible.store(true, Ordering::Relaxed);
+    // 看门狗空闲计时从开层这一刻算起，否则热键开层会带着上次按键的旧时间戳被误判超时
+    LAST_KEY_MS.store(windows::now_ms(), Ordering::Relaxed);
     eprintln!(
         "[t={}] overlay open ({} programs)",
         windows::now_ms(),
@@ -305,11 +307,14 @@ fn select_entry(app: &AppHandle, inner: &Inner, ov: &mut OverlayState, entry: &P
     } else {
         ov.phase = Phase::Windows;
         ov.sel_proc = Some(entry.process.clone());
-        // mru 模式：按最近使用时间倒序编号，1 = 上次用的；时间戳相同保持 Z 序（稳定排序）
+        // 排序：mru 按最近使用倒序（1 = 上次用的）；zorder 按窗口句柄序（创建序，稳定）。
+        // Z 序不能做「固定序号」——任何激活都会把窗口提到 Z 顶，等于隐式 MRU
         let mut wins = wins.clone();
         if inner.cfg.lock().unwrap().window_order == "mru" {
             let mru = inner.mru.lock().unwrap();
             wins.sort_by_key(|w| std::cmp::Reverse(mru.get(&w.hwnd).copied().unwrap_or(0)));
+        } else {
+            wins.sort_by_key(|w| w.hwnd);
         }
         ov.wins = wins;
         ov.active = 0;
