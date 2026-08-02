@@ -192,10 +192,12 @@ function render(s) {
         .map(
           (w) =>
             `<div class="wrow${w.active ? " active" : ""}" data-idx="${w.index}" data-hwnd="${w.hwnd}">` +
-            `<img class="wthumb" alt="" />` +
+            `<div class="wtop">` +
             `<span class="key">${w.index}</span>` +
             `<span class="name">${escapeHtml(w.title)}</span>` +
             `<span class="screen">屏${w.screen + 1}</span>` +
+            `</div>` +
+            `<img class="wthumb" alt="" />` +
             `</div>`
         )
         .join("") +

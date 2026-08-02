@@ -185,21 +185,28 @@ body {
 
 .wrow {
   display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 6px 10px;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
   border-radius: 6px;
   font-size: 15px;
   cursor: pointer;
 }
 
+.wtop {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+}
+
 .wthumb {
-  width: 96px;
-  height: 54px;
+  width: 100%;
+  height: 88px;
   object-fit: cover;
   border-radius: 4px;
   background: #111;
-  flex-shrink: 0;
+  display: block;
 }
 
 .wrow.active {
