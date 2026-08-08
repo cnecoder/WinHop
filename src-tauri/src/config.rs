@@ -25,37 +25,69 @@ pub struct Program {
     pub process: String,
 }
 
-pub fn load() -> (Config, std::path::PathBuf) {
-    let exe_dir = std::env::current_exe().ok().and_then(|p| {
-        p.parent().map(|d| d.to_path_buf())
-    });
-    let cwd = std::env::current_dir().ok();
-    let mut candidates: Vec<std::path::PathBuf> = vec![];
-    if let Some(d) = exe_dir.as_ref() {
-        candidates.push(d.join("config.json"));
+// 读取并规范化某个路径下的配置文件（解析失败即 panic，不静默）
+fn read_cfg(path: &std::path::Path) -> Config {
+    let text =
+        std::fs::read_to_string(path).unwrap_or_else(|e| panic!("读取 {} 失败: {}", path.display(), e));
+    let mut cfg: Config = serde_json::from_str(&text)
+        .unwrap_or_else(|e| panic!("解析 {} 失败: {}", path.display(), e));
+    validate(&mut cfg);
+    // 枚举结果统一小写，配置进程名同样归一化，避免大小写不匹配
+    for p in &mut cfg.programs {
+        p.process = p.process.to_lowercase();
     }
-    if let Some(d) = cwd.as_ref() {
-        candidates.push(d.join("config.json"));
-        if let Some(parent) = d.parent() {
+    cfg
+}
+
+// 配置文件放 %APPDATA%\WinTab\config.json：升级/重装安装器不碰用户目录，配置不丢。
+// 旧版配置在 exe 目录/项目根目录：首次运行自动迁移（复制到新位置，旧文件保留）。
+pub fn load() -> (Config, std::path::PathBuf) {
+    let appdata = std::env::var("APPDATA")
+        .ok()
+        .map(|d| std::path::PathBuf::from(d).join("WinTab"));
+    let new_path = appdata.as_ref().map(|d| d.join("config.json"));
+    if let Some(p) = new_path.as_ref() {
+        if p.exists() {
+            eprintln!("[wintab] 加载配置 {}", p.display());
+            return (read_cfg(p), p.clone());
+        }
+    }
+    // 旧位置查找（exe 目录 → 当前目录 → 项目根目录），找到则迁移到 APPDATA
+    let mut legacy: Vec<std::path::PathBuf> = vec![];
+    if let Some(d) = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+    {
+        legacy.push(d.join("config.json"));
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        legacy.push(cwd.join("config.json"));
+        if let Some(parent) = cwd.parent() {
             // dev 模式下 tauri CLI 在 src-tauri 下运行 cargo，配置放项目根目录
-            candidates.push(parent.join("config.json"));
+            legacy.push(parent.join("config.json"));
             if let Some(grand) = parent.parent() {
                 // 直接从 target/ 下运行 exe 时再上一级
-                candidates.push(grand.join("config.json"));
+                legacy.push(grand.join("config.json"));
             }
         }
     }
-    for path in candidates {
+    for path in legacy {
         if path.exists() {
-            let text = std::fs::read_to_string(&path)
-                .unwrap_or_else(|e| panic!("读取 {} 失败: {}", path.display(), e));
-            let mut cfg: Config = serde_json::from_str(&text)
-                .unwrap_or_else(|e| panic!("解析 {} 失败: {}", path.display(), e));
-            validate(&mut cfg);
-            // 枚举结果统一小写，配置进程名同样归一化，避免大小写不匹配
-            for p in &mut cfg.programs {
-                p.process = p.process.to_lowercase();
+            let cfg = read_cfg(&path);
+            if let (Some(dir), Some(new)) = (appdata.as_ref(), new_path.as_ref()) {
+                if std::fs::create_dir_all(dir).is_ok()
+                    && std::fs::copy(&path, new).is_ok()
+                {
+                    eprintln!(
+                        "[wintab] 迁移旧配置 {} → {}",
+                        path.display(),
+                        new.display()
+                    );
+                    return (cfg, new.clone());
+                }
             }
+            // APPDATA 不可用：退回旧位置（配置仍生效，只是不迁移）
+            eprintln!("[wintab] 加载配置 {}（无法迁移到 APPDATA）", path.display());
             return (cfg, path);
         }
     }
@@ -67,19 +99,16 @@ pub fn load() -> (Config, std::path::PathBuf) {
         programs: Vec::new(),
     };
     let json = serde_json::to_string_pretty(&default).expect("序列化默认配置失败");
-    let mut create_dirs: Vec<std::path::PathBuf> = vec![];
-    if let Some(d) = exe_dir {
-        create_dirs.push(d);
-    }
-    if let Some(d) = cwd {
-        create_dirs.push(d);
-    }
-    if let Ok(appdata) = std::env::var("APPDATA") {
-        create_dirs.push(std::path::PathBuf::from(appdata).join("WinTab"));
-    }
-    for dir in create_dirs {
+    if let Some(dir) = appdata.as_ref() {
         let path = dir.join("config.json");
-        if std::fs::create_dir_all(&dir).is_ok() && std::fs::write(&path, &json).is_ok() {
+        if std::fs::create_dir_all(dir).is_ok() && std::fs::write(&path, &json).is_ok() {
+            eprintln!("[wintab] 已创建默认配置 {}", path.display());
+            return (default, path);
+        }
+    }
+    if let Some(d) = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())) {
+        let path = d.join("config.json");
+        if std::fs::write(&path, &json).is_ok() {
             eprintln!("[wintab] 已创建默认配置 {}", path.display());
             return (default, path);
         }

@@ -541,11 +541,17 @@ pub fn base64(data: &[u8]) -> String {
 
 // taskmgr 等管理员程序受 UIPI 保护：非提权进程的钩子吞键被无视、SetForegroundWindow 被拒。
 // 检测当前进程是否提权，未提权则按配置自提升重启。
-// release 无控制台，stderr 无处可去；重定向到 %TEMP%\wintab.log 保证日志可查。
+// release 无控制台，stderr 无处可去；重定向到配置目录 %APPDATA%\WinTab\wintab.log
+// 保证日志可查（与 config.json 同目录，升级/重装不丢）。
 // 必须在任何 eprintln 之前调用（Rust 首次取 stderr 句柄时生效）。
 pub fn redirect_stderr_to_file() {
     unsafe {
-        let path = std::env::temp_dir().join("wintab.log");
+        let dir = std::env::var("APPDATA")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| std::env::temp_dir());
+        let dir = dir.join("WinTab");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("wintab.log");
         let wide = to_wide(path.to_str().unwrap_or("wintab.log"));
         let file = CreateFileW(
             wide.as_ptr(),
