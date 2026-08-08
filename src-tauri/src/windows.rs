@@ -258,36 +258,40 @@ pub fn file_description(path: &str) -> Option<String> {
                 combos.push(fallback);
             }
         }
-        // 取 FileDescription 与 ProductName 中较长者：部分软件（如 MobaXterm）
-        // FileDescription 是短名（"MobaX"），完整名在 ProductName
-        let mut best: Option<String> = None;
+        // 只取 FileDescription（与任务管理器「文件说明」列同源同规则），
+        // 不读 ProductName：系统二进制的 ProductName 是「Microsoft® Windows®
+        // Operating System」通用串，曾导致多个系统窗口被识别成同名
         for (lang, cp) in &combos {
-            for key in ["FileDescription", "ProductName"] {
-                let path_str = format!("\\StringFileInfo\\{:04X}{:04X}\\{}", lang, cp, key);
-                let key_wide = to_wide(&path_str);
-                let mut val: *mut c_void = std::ptr::null_mut();
-                let mut val_len: u32 = 0;
-                if VerQueryValueW(
-                    buf.as_mut_ptr() as *mut c_void,
-                    key_wide.as_ptr(),
-                    &mut val,
-                    &mut val_len,
-                ) != 0
-                    && !val.is_null()
-                    && val_len > 0
-                {
-                    let s = std::slice::from_raw_parts(val as *const u16, (val_len as usize) / 2);
-                    let s = String::from_utf16_lossy(s);
-                    let s = s.trim_end_matches('\0').trim().to_string();
-                    if !s.is_empty()
-                        && best.as_ref().map(|b| s.len() > b.len()).unwrap_or(true)
-                    {
-                        best = Some(s);
-                    }
+            let path_str = format!("\\StringFileInfo\\{:04X}{:04X}\\FileDescription", lang, cp);
+            let key_wide = to_wide(&path_str);
+            let mut val: *mut c_void = std::ptr::null_mut();
+            let mut val_len: u32 = 0;
+            if VerQueryValueW(
+                buf.as_mut_ptr() as *mut c_void,
+                key_wide.as_ptr(),
+                &mut val,
+                &mut val_len,
+            ) != 0
+                && !val.is_null()
+                && val_len > 0
+            {
+                // 注意：val_len 不可靠——部分软件（Chrome/ASUS/系统二进制等）的
+                // 版本资源长度字段不规范，实测返回值仅为真实长度的一半，
+                // 按 val_len 截断会把 "Google Chrome" 读成 "Google"。
+                // 改为按 null 终止符读取：在版本资源 buffer 范围内从 val 起找 \0
+                let buf_units = buf.len() / 2;
+                let val_off = (val as usize - buf.as_ptr() as usize) / 2;
+                let avail = buf_units.saturating_sub(val_off).min(512);
+                let slice = std::slice::from_raw_parts(val as *const u16, avail);
+                let end = slice.iter().position(|&c| c == 0).unwrap_or(slice.len());
+                let s = String::from_utf16_lossy(&slice[..end]);
+                let s = s.trim().to_string();
+                if !s.is_empty() {
+                    return Some(s);
                 }
             }
         }
-        best
+        None
     }
 }
 
@@ -620,4 +624,48 @@ pub fn relaunch_elevated() {
 
 fn to_wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // 回归：系统二进制须返回各自 FileDescription（如 "Application Frame Host"），
+    // 不得是通用串「Microsoft® Windows® Operating System」
+    //（曾因读 ProductName 导致多个系统窗口全部识别成 "Microsoft Windows"）
+    #[test]
+    fn system_exe_not_generic_name() {
+        for p in [
+            "C:\\Windows\\System32\\ApplicationFrameHost.exe",
+            "C:\\Windows\\System32\\RuntimeBroker.exe",
+        ] {
+            if std::path::Path::new(p).exists() {
+                let n = file_description(p);
+                assert!(n.is_some(), "{} 应有版本资源", p);
+                assert!(
+                    !n.unwrap().contains("Operating System"),
+                    "{} 返回了通用串",
+                    p
+                );
+            }
+        }
+    }
+
+    // 回归：版本资源长度字段不规范导致名称截断（val_len 不可靠，按 null 截断）。
+    // Chrome 的 FileDescription 是 "Google Chrome"，若截断只剩 "Google"
+    #[test]
+    fn full_name_not_truncated() {
+        let p = std::env::var("LOCALAPPDATA")
+            .map(|d| {
+                std::path::PathBuf::from(d)
+                    .join("Google\\Chrome\\Application\\chrome.exe")
+            })
+            .unwrap_or_default();
+        if p.exists() {
+            assert_eq!(
+                file_description(p.to_str().unwrap()).as_deref(),
+                Some("Google Chrome")
+            );
+        }
+    }
 }
