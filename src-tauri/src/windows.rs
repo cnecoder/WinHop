@@ -247,6 +247,9 @@ pub fn file_description(path: &str) -> Option<String> {
             lang = (t[0] as u16) | ((t[1] as u16) << 8);
             cp = (t[2] as u16) | ((t[3] as u16) << 8);
         }
+        // 取 FileDescription 与 ProductName 中较长者：部分软件（如 MobaXterm）
+        // FileDescription 是短名（"MobaX"），完整名在 ProductName
+        let mut best: Option<String> = None;
         for key in ["FileDescription", "ProductName"] {
             let path_str = format!("\\StringFileInfo\\{:04X}{:04X}\\{}", lang, cp, key);
             let key_wide = to_wide(&path_str);
@@ -264,12 +267,14 @@ pub fn file_description(path: &str) -> Option<String> {
                 let s = std::slice::from_raw_parts(val as *const u16, (val_len as usize) / 2);
                 let s = String::from_utf16_lossy(s);
                 let s = s.trim_end_matches('\0').trim().to_string();
-                if !s.is_empty() {
-                    return Some(s);
+                if !s.is_empty()
+                    && best.as_ref().map(|b| s.len() > b.len()).unwrap_or(true)
+                {
+                    best = Some(s);
                 }
             }
         }
-        None
+        best
     }
 }
 
