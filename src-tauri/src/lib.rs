@@ -420,6 +420,12 @@ async fn window_thumbnail(hwnd: isize, max_w: u32, max_h: u32) -> Result<String,
         hwnd,
         bmp.len()
     );
+    // 诊断转储：设置 WINTAB_DUMP_THUMB=1 时把 BMP 落盘
+    if std::env::var("WINTAB_DUMP_THUMB").is_ok() {
+        let path = std::env::temp_dir().join(format!("wt_thumb_{:#x}.bmp", hwnd));
+        let _ = std::fs::write(&path, &bmp);
+        eprintln!("[t={}] 转储 {}", windows::now_ms(), path.display());
+    }
     Ok(format!("data:image/bmp;base64,{}", windows::base64(&bmp)))
 }
 

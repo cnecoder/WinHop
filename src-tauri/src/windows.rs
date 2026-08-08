@@ -406,11 +406,16 @@ pub fn foreground() -> isize {
 // 经实测验证：PrintWindow 与屏幕像素一致（平均差 <1）；
 // 之前「色彩反转/失真」为误诊——对照时屏幕位置显示的是另一覆盖窗口。
 // 24bpp 无 alpha 字节，消除 BMP 解码歧义（32bpp 的 alpha/方向问题曾导致显示异常）。
+// PrintWindow 并发调用有 GDI 竞态（实测：并行捕获多个窗口会返回错乱/屏幕内容），
+// 用全局锁串行化捕获
+static CAPTURE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 pub fn capture_window(hwnd: isize, max_w: u32, max_h: u32) -> Option<Vec<u8>> {
+    let _guard = CAPTURE_LOCK.lock().ok()?;
     unsafe {
         use windows_sys::Win32::Graphics::Gdi::{
             CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDIBits, GetDC,
-            ReleaseDC, SelectObject, SRCCOPY, StretchBlt, BITMAPINFO, BITMAPINFOHEADER,
+            ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER,
         };
         use windows_sys::Win32::Storage::Xps::PrintWindow;
         use windows_sys::Win32::UI::WindowsAndMessaging::PW_RENDERFULLCONTENT;
@@ -438,28 +443,24 @@ pub fn capture_window(hwnd: isize, max_w: u32, max_h: u32) -> Option<Vec<u8>> {
 
         let screen = GetDC(std::ptr::null_mut());
         let mem = CreateCompatibleDC(screen);
-        let bmp = CreateCompatibleBitmap(screen, tw, th);
-        let tmp_mem = CreateCompatibleDC(screen);
-        let tmp_bmp = CreateCompatibleBitmap(screen, w, hh);
+        let bmp = CreateCompatibleBitmap(screen, w, hh);
         ReleaseDC(std::ptr::null_mut(), screen);
-        if mem.is_null() || bmp.is_null() || tmp_mem.is_null() || tmp_bmp.is_null() {
+        if mem.is_null() || bmp.is_null() {
             return None;
         }
         let _old = SelectObject(mem, bmp);
-        let _old_tmp = SelectObject(tmp_mem, tmp_bmp);
+        PrintWindow(h, mem, PW_RENDERFULLCONTENT);
 
-        PrintWindow(h, tmp_mem, PW_RENDERFULLCONTENT);
-        StretchBlt(mem, 0, 0, tw, th, tmp_mem, 0, 0, w, hh, SRCCOPY);
-        DeleteObject(tmp_bmp);
-        DeleteDC(tmp_mem);
-
+        // 全尺寸 24bpp 读取。注意：不能 BitBlt/StretchBlt 拷贝 PrintWindow 的 DC——
+        // DWM 合成内容不在 GDI 表面，拷贝得到黑图（实测）；GetDIBits 走 DWM 快照可正常读取
+        let row_size = ((w * 3 + 3) / 4) * 4;
         let mut bi = BITMAPINFO {
             bmiHeader: BITMAPINFOHEADER {
                 biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-                biWidth: tw,
-                biHeight: th, // 正高度 = 自底向上
+                biWidth: w,
+                biHeight: hh,
                 biPlanes: 1,
-                biBitCount: 24, // 24bpp 无 alpha，最通用格式
+                biBitCount: 24,
                 biCompression: 0,
                 biSizeImage: 0,
                 biXPelsPerMeter: 0,
@@ -469,23 +470,35 @@ pub fn capture_window(hwnd: isize, max_w: u32, max_h: u32) -> Option<Vec<u8>> {
             },
             bmiColors: std::mem::zeroed(),
         };
-        let row_size = ((tw * 3 + 3) / 4) * 4; // 24bpp 行按 4 字节对齐
-        let mut bits = vec![0u8; (row_size * th) as usize];
+        let mut bits = vec![0u8; (row_size * hh) as usize];
         GetDIBits(
             mem,
             bmp,
             0,
-            th as u32,
+            hh as u32,
             bits.as_mut_ptr() as *mut c_void,
             &mut bi,
             0,
         );
-
         DeleteObject(bmp);
         DeleteDC(mem);
 
-        // 组装 24bpp BMP：54 字节头 + 对齐行像素
-        let file_size = 54u32 + row_size as u32 * th as u32;
+        // Rust 侧最近邻缩放到 tw×th
+        let trow = ((tw * 3 + 3) / 4) * 4;
+        let mut out = vec![0u8; (trow * th) as usize];
+        for y in 0..th as usize {
+            let sy = (((y as f64 + 0.5) * hh as f64 / th as f64) as usize).min(hh as usize - 1);
+            let srow = sy * row_size as usize;
+            for x in 0..tw as usize {
+                let sx = (((x as f64 + 0.5) * w as f64 / tw as f64) as usize).min(w as usize - 1);
+                let si = srow + sx * 3;
+                let di = y * trow as usize + x * 3;
+                out[di..di + 3].copy_from_slice(&bits[si..si + 3]);
+            }
+        }
+
+        // 组装 24bpp BMP
+        let file_size = 54u32 + trow as u32 * th as u32;
         let mut data = Vec::with_capacity(file_size as usize);
         data.extend_from_slice(b"BM");
         data.extend_from_slice(&file_size.to_le_bytes());
@@ -497,12 +510,12 @@ pub fn capture_window(hwnd: isize, max_w: u32, max_h: u32) -> Option<Vec<u8>> {
         data.extend_from_slice(&1u16.to_le_bytes());
         data.extend_from_slice(&24u16.to_le_bytes());
         data.extend_from_slice(&0u32.to_le_bytes());
-        data.extend_from_slice(&(row_size as u32 * th as u32).to_le_bytes());
+        data.extend_from_slice(&(trow as u32 * th as u32).to_le_bytes());
         data.extend_from_slice(&0i32.to_le_bytes());
         data.extend_from_slice(&0i32.to_le_bytes());
         data.extend_from_slice(&0u32.to_le_bytes());
         data.extend_from_slice(&0u32.to_le_bytes());
-        data.extend_from_slice(&bits[..(row_size * th) as usize]);
+        data.extend_from_slice(&out);
         Some(data)
     }
 }
