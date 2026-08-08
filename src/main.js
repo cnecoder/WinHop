@@ -208,16 +208,27 @@ function scrollActiveIntoView() {
   if (active) active.scrollIntoView({ block: "nearest" });
 }
 
-// 右侧大预览：复用行捕获图（目标 = 悬停行优先，否则选中行），不重复捕获
-function updatePreview() {
+// 右侧大预览：独立按 1920px 高清捕获（目标 = 悬停行优先，否则选中行）。
+// 行缩略图只有 960px，直接拉伸到大预览会模糊。
+let previewTarget = null;
+async function updatePreview() {
   const img = document.getElementById("preview-img");
   if (!img || !state || state.phase !== "windows") return;
   const idx = hoverIdx !== null ? hoverIdx : state.windows.findIndex((w) => w.active);
   const target = state.windows[Math.max(0, idx)];
-  if (!target) return;
-  const row = document.querySelector(`.wrow[data-idx="${target.index}"]`);
-  const src = row ? row.querySelector("img.wthumb").src : "";
-  if (img.src !== src) img.src = src;
+  if (!target || previewTarget === target.hwnd) return;
+  previewTarget = target.hwnd;
+  img.dataset.hwnd = String(target.hwnd);
+  try {
+    const url = await invoke("window_thumbnail", {
+      hwnd: target.hwnd,
+      maxW: 1920,
+      maxH: 1080,
+    });
+    if (img && img.dataset.hwnd === String(target.hwnd)) img.src = url;
+  } catch (err) {
+    // 捕获失败：保留上一张
+  }
 }
 
 // 悬停联动：预览跟随悬停行
