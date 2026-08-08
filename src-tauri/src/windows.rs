@@ -228,10 +228,11 @@ pub fn file_description(path: &str) -> Option<String> {
         if GetFileVersionInfoW(wide.as_ptr(), 0, size, buf.as_mut_ptr() as *mut c_void) == 0 {
             return None;
         }
-        // 从 Translation 确定语言/代码页
-        let mut lang = 0x0409u16;
-        let mut cp = 0x04B0u16;
+        // 收集所有 Translation 条目 + 常用回退组合：
+        // 部分软件（如 MobaXterm）Translation 首项是 0009/00E4 但字符串块不存在，
+        // 实际内容在 0409/04B0 等组合下——只试首项会拿到空，回退成 exe 文件名
         let trans_key = to_wide("\\VarFileInfo\\Translation");
+        let mut combos: Vec<(u16, u16)> = Vec::new();
         let mut trans: *mut c_void = std::ptr::null_mut();
         let mut trans_len: u32 = 0;
         if VerQueryValueW(
@@ -243,34 +244,46 @@ pub fn file_description(path: &str) -> Option<String> {
             && !trans.is_null()
             && trans_len >= 4
         {
-            let t = std::slice::from_raw_parts(trans as *const u8, 4);
-            lang = (t[0] as u16) | ((t[1] as u16) << 8);
-            cp = (t[2] as u16) | ((t[3] as u16) << 8);
+            let n = (trans_len as usize) / 4;
+            let t = std::slice::from_raw_parts(trans as *const u8, n * 4);
+            for i in 0..n {
+                combos.push((
+                    (t[i * 4] as u16) | ((t[i * 4 + 1] as u16) << 8),
+                    (t[i * 4 + 2] as u16) | ((t[i * 4 + 3] as u16) << 8),
+                ));
+            }
+        }
+        for fallback in [(0x0409u16, 0x04B0u16), (0x0409, 0x0000), (0x0804, 0x04B0), (0x0804, 0x0000), (0x0000, 0x04B0), (0x0000, 0x0000)] {
+            if !combos.contains(&fallback) {
+                combos.push(fallback);
+            }
         }
         // 取 FileDescription 与 ProductName 中较长者：部分软件（如 MobaXterm）
         // FileDescription 是短名（"MobaX"），完整名在 ProductName
         let mut best: Option<String> = None;
-        for key in ["FileDescription", "ProductName"] {
-            let path_str = format!("\\StringFileInfo\\{:04X}{:04X}\\{}", lang, cp, key);
-            let key_wide = to_wide(&path_str);
-            let mut val: *mut c_void = std::ptr::null_mut();
-            let mut val_len: u32 = 0;
-            if VerQueryValueW(
-                buf.as_mut_ptr() as *mut c_void,
-                key_wide.as_ptr(),
-                &mut val,
-                &mut val_len,
-            ) != 0
-                && !val.is_null()
-                && val_len > 0
-            {
-                let s = std::slice::from_raw_parts(val as *const u16, (val_len as usize) / 2);
-                let s = String::from_utf16_lossy(s);
-                let s = s.trim_end_matches('\0').trim().to_string();
-                if !s.is_empty()
-                    && best.as_ref().map(|b| s.len() > b.len()).unwrap_or(true)
+        for (lang, cp) in &combos {
+            for key in ["FileDescription", "ProductName"] {
+                let path_str = format!("\\StringFileInfo\\{:04X}{:04X}\\{}", lang, cp, key);
+                let key_wide = to_wide(&path_str);
+                let mut val: *mut c_void = std::ptr::null_mut();
+                let mut val_len: u32 = 0;
+                if VerQueryValueW(
+                    buf.as_mut_ptr() as *mut c_void,
+                    key_wide.as_ptr(),
+                    &mut val,
+                    &mut val_len,
+                ) != 0
+                    && !val.is_null()
+                    && val_len > 0
                 {
-                    best = Some(s);
+                    let s = std::slice::from_raw_parts(val as *const u16, (val_len as usize) / 2);
+                    let s = String::from_utf16_lossy(s);
+                    let s = s.trim_end_matches('\0').trim().to_string();
+                    if !s.is_empty()
+                        && best.as_ref().map(|b| s.len() > b.len()).unwrap_or(true)
+                    {
+                        best = Some(s);
+                    }
                 }
             }
         }
