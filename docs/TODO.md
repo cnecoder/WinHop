@@ -2,9 +2,9 @@
 
 ## 功能缺口（已确认需求但未实现，Windows-only 后均为可用专属能力）
 
-- [ ] **虚拟桌面支持**（高优先级）：目标窗口在另一任务视图桌面时无法激活——`IVirtualDesktopManager` COM API（切换/移动窗口到当前桌面）
 - [ ] **开机自启**（高优先级）：`autostart` 配置项，写入注册表 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`（ADR-004 原定）
 - [ ] **UIAccess 免 UAC**（高优先级）：代码签名 + 可信位置部署后可免提权弹窗（需签名证书）
+- [ ] **虚拟桌面支持**（低优先级，用户场景少用）：目标窗口在另一任务视图桌面时无法激活——`IVirtualDesktopManager` COM API（先做识别+标记，再考虑自动切桌面）
 - [ ] **`wintab capture` 辅助命令**：CLI 打印当前激活窗口的进程名/标题，方便手写配置（ADR-004 原定，现已被「+ 号一键入配置」部分替代，纯手写场景仍有用）
 
 ## 已知限制（待解决）
