@@ -200,6 +200,8 @@ fn build_prog_list(cfg: &Config, wins_by_proc: &HashMap<String, Vec<WinInfo>>) -
             break; // 字母耗尽，不再补全
         }
     }
+    // 一页最多显示 15 个（字母分配仅覆盖可见项）
+    list.truncate(15);
     // 未运行的配置程序排到最后（运行中在前：配置序、自动补全次之；稳定排序保持组内顺序）
     list.sort_by_key(|e| {
         let running = wins_by_proc
