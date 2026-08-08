@@ -140,6 +140,7 @@ src/          覆盖层 UI（HTML/CSS/JS，纯事件驱动渲染）
 
 ## 文档
 
+- [构建与验证指南](docs/build.md)（本地编译、单测、安装包构建、发布）
 - [TODO（未完成需求）](docs/TODO.md)
 - [术语表](docs/glossary.md)
 - [ADR-001 技术栈](docs/ADR-001-tech-stack.md)
