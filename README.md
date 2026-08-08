@@ -8,7 +8,7 @@ Windows 程序快速切换器
 
 全局热键呼出全屏选择页，字母键选程序、数字键选窗口，双屏显示窗口所在屏幕。
 
-Rust + Tauri 2 · Windows 先行（跨平台为目标）
+Rust + Tauri 2（WebView2）· Windows 10/11 x64
 
 </div>
 
