@@ -52,7 +52,7 @@ window.addEventListener("keydown", (e) => {
   else if (e.key === "ArrowDown") k = "down";
   else if (e.key === "Enter") k = "enter";
   else if (e.ctrlKey && e.code === "Space") k = "hotkey";
-  else if (/^[a-z]$/.test(e.key)) k = "letter:" + e.key;
+  else if (/^[a-zA-Z]$/.test(e.key)) k = "letter:" + e.key.toLowerCase();
   else if (/^[0-9]$/.test(e.key)) k = "digit:" + e.key;
   if (k) invoke("key", { k });
 });
