@@ -175,12 +175,21 @@ fn build_prog_list(cfg: &Config, wins_by_proc: &HashMap<String, Vec<WinInfo>>) -
         let letter = ('a'..='z').find(|c| !used.contains(&c.to_string()));
         if let Some(l) = letter {
             used.insert(l.to_string());
-            // 显示名优先取 exe 版本资源的 FileDescription（如 msedge.exe → Microsoft Edge）
-            let name = wins_by_proc
-                .get(proc)
-                .and_then(|wins| wins.first())
-                .and_then(|w| windows::file_description(&w.path))
-                .unwrap_or_else(|| proc.trim_end_matches(".exe").to_string());
+            // 显示名取「版本资源名」与「exe 文件名（保留大小写）」中较长者：
+            // 版本名更全（msedge.exe → Microsoft Edge）；但部分软件资源里只有短名
+            // （MobaXterm 的 FileDescription/ProductName 都是 "MobaX"），此时用 exe 名
+            let path = wins_by_proc.get(proc).and_then(|wins| wins.first()).map(|w| w.path.clone());
+            let stem = path
+                .as_deref()
+                .and_then(|p| p.rsplit('\\').next())
+                .unwrap_or(proc)
+                .trim_end_matches(".exe")
+                .to_string();
+            let name = path
+                .as_deref()
+                .and_then(windows::file_description)
+                .filter(|n| n.len() >= stem.len())
+                .unwrap_or(stem);
             list.push(ProgEntry {
                 key: l.to_string(),
                 name,
