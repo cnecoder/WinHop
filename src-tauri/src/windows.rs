@@ -43,6 +43,8 @@ pub enum HookMsg {
     Hotkey,
     Up,
     Down,
+    PageUp,
+    PageDown,
     Enter,
     ClickOutside,
 }

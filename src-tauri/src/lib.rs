@@ -22,6 +22,9 @@ enum Phase {
     Windows,
 }
 
+// 程序层每页显示数量（超过则 PageUp/PageDown 翻页）
+const PROG_PAGE_SIZE: usize = 20;
+
 #[derive(Clone)]
 struct ProgEntry {
     key: String,
@@ -35,6 +38,7 @@ struct OverlayState {
     prog_list: Vec<ProgEntry>,
     wins_by_proc: HashMap<String, Vec<WinInfo>>,
     prog_sel: usize,
+    prog_page: usize,
     sel_proc: Option<String>,
     wins: Vec<WinInfo>,
     active: usize,
@@ -50,6 +54,7 @@ impl Default for OverlayState {
             prog_list: Vec::new(),
             wins_by_proc: HashMap::new(),
             prog_sel: 0,
+            prog_page: 0,
             sel_proc: None,
             wins: Vec::new(),
             active: 0,
@@ -98,11 +103,18 @@ struct Render {
     window_order: String,
     programs: Vec<ProgramUi>,
     windows: Vec<WindowUi>,
+    page: usize,
+    page_count: usize,
 }
 
 fn emit(app: &AppHandle, inner: &Inner, ov: &OverlayState) {
     let cfg = inner.cfg.lock().unwrap();
     let visible = inner.visible.load(Ordering::Relaxed);
+    let total = ov.prog_list.len();
+    let page_count = total.div_ceil(PROG_PAGE_SIZE).max(1);
+    let page = ov.prog_page.min(page_count - 1);
+    let start = page * PROG_PAGE_SIZE;
+    let end = (start + PROG_PAGE_SIZE).min(total);
     let mut render = Render {
         visible,
         phase: "programs".into(),
@@ -110,6 +122,8 @@ fn emit(app: &AppHandle, inner: &Inner, ov: &OverlayState) {
         window_order: cfg.window_order.clone(),
         programs: Vec::new(),
         windows: Vec::new(),
+        page: page + 1,
+        page_count,
     };
     if ov.phase == Phase::Windows {
         render.phase = "windows".into();
@@ -133,7 +147,8 @@ fn emit(app: &AppHandle, inner: &Inner, ov: &OverlayState) {
             }
         }
     }
-    for (i, p) in ov.prog_list.iter().enumerate() {
+    for (i, p) in ov.prog_list[start..end].iter().enumerate() {
+        let abs = start + i;
         let count = ov
             .wins_by_proc
             .get(&p.process)
@@ -145,7 +160,7 @@ fn emit(app: &AppHandle, inner: &Inner, ov: &OverlayState) {
             process: p.process.clone(),
             running: count > 0,
             count,
-            active: i == ov.prog_sel,
+            active: abs == ov.prog_sel,
             configured: p.configured,
         });
     }
@@ -198,8 +213,8 @@ fn build_prog_list(cfg: &Config, wins_by_proc: &HashMap<String, Vec<WinInfo>>) -
             break; // 字母耗尽，不再补全
         }
     }
-    // 一页最多显示 15 个（字母分配仅覆盖可见项）
-    list.truncate(15);
+    // 字母 a-z 共 26 个上限；超过的程序不再补全（前端 PageUp/PageDown 分页，每页 20 个）
+    list.truncate(26);
     // 未运行的配置程序排到最后（运行中在前：配置序、自动补全次之；稳定排序保持组内顺序）
     list.sort_by_key(|e| {
         let running = wins_by_proc
@@ -231,6 +246,7 @@ fn open(app: &AppHandle) {
     ov.prog_list = build_prog_list(&cfg, &wins_by_proc);
     ov.wins_by_proc = wins_by_proc;
     ov.prog_sel = 0;
+    ov.prog_page = 0;
     ov.sel_proc = None;
     ov.wins.clear();
     ov.digit_buf.clear();
@@ -302,6 +318,8 @@ fn close(app: &AppHandle) {
         window_order: inner.cfg.lock().unwrap().window_order.clone(),
         programs: Vec::new(),
         windows: Vec::new(),
+        page: 1,
+        page_count: 1,
     };
     let _ = app.emit("overlay", &render);
 }
@@ -370,11 +388,24 @@ fn select_entry(app: &AppHandle, inner: &Inner, ov: &mut OverlayState, entry: &P
     }
 }
 
+// 确保 prog_page 是 prog_sel 所在页
+fn sync_page(ov: &mut OverlayState) {
+    ov.prog_page = ov.prog_sel / PROG_PAGE_SIZE;
+}
+
 fn select_by_letter(app: &AppHandle, inner: &Inner, ov: &mut OverlayState, c: char) -> bool {
-    let Some(entry) = ov.prog_list.iter().find(|e| e.key == c.to_string()).cloned() else {
+    let Some((idx, entry)) = ov
+        .prog_list
+        .iter()
+        .enumerate()
+        .find(|(_, e)| e.key == c.to_string())
+        .map(|(i, e)| (i, e.clone()))
+    else {
         eprintln!("[wintab] letter '{}' 无对应程序", c);
         return false;
     };
+    ov.prog_sel = idx;
+    sync_page(ov);
     select_entry(app, inner, ov, &entry)
 }
 
@@ -399,6 +430,8 @@ fn key(app: AppHandle, k: String) {
         "esc" => HookMsg::Esc,
         "up" => HookMsg::Up,
         "down" => HookMsg::Down,
+        "pageup" => HookMsg::PageUp,
+        "pagedown" => HookMsg::PageDown,
         "enter" => HookMsg::Enter,
         "hotkey" => HookMsg::Hotkey,
         s if s.starts_with("letter:") => {
@@ -472,6 +505,8 @@ fn add_program(app: AppHandle, key: String, name: String, process: String) -> Re
         let mut ov = inner.overlay.lock().unwrap();
         let cfg = inner.cfg.lock().unwrap().clone();
         ov.prog_list = build_prog_list(&cfg, &ov.wins_by_proc);
+        ov.prog_sel = 0;
+        ov.prog_page = 0;
         emit(&app, &inner, &ov);
     }
     Ok(())
@@ -560,6 +595,7 @@ fn handle_key(app: &AppHandle, msg: HookMsg) {
                 Phase::Programs if !ov.prog_list.is_empty() => {
                     let len = ov.prog_list.len() as isize;
                     ov.prog_sel = ((ov.prog_sel as isize + delta + len) % len) as usize;
+                    sync_page(&mut ov);
                     emit(app, &inner, &ov);
                 }
                 Phase::Windows if !ov.wins.is_empty() => {
@@ -569,6 +605,29 @@ fn handle_key(app: &AppHandle, msg: HookMsg) {
                 }
                 _ => {}
             }
+        }
+        HookMsg::PageUp | HookMsg::PageDown => {
+            if ov.phase != Phase::Programs || ov.prog_list.is_empty() {
+                return;
+            }
+            let total = ov.prog_list.len();
+            let page_count = total.div_ceil(PROG_PAGE_SIZE);
+            let cur = ov.prog_sel / PROG_PAGE_SIZE;
+            let new_page = if matches!(msg, HookMsg::PageDown) {
+                (cur + 1).min(page_count - 1)
+            } else if cur == 0 {
+                0
+            } else {
+                cur - 1
+            };
+            ov.prog_page = new_page;
+            let start = new_page * PROG_PAGE_SIZE;
+            let end = (start + PROG_PAGE_SIZE).min(total);
+            // 选中保持在当前页内：超出则夹到页内首/末
+            if ov.prog_sel < start || ov.prog_sel >= end {
+                ov.prog_sel = if matches!(msg, HookMsg::PageDown) { start } else { end - 1 };
+            }
+            emit(app, &inner, &ov);
         }
         HookMsg::Enter => {
             let done = match ov.phase {

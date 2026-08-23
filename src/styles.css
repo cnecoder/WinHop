@@ -133,6 +133,14 @@ body {
   gap: 6px;
 }
 
+.pager {
+  text-align: center;
+  color: var(--muted, #8a93a6);
+  font-size: 13px;
+  padding: 4px 0 8px;
+  opacity: 0.85;
+}
+
 .row.active {
   background: rgba(0, 255, 102, 0.14);
   outline: 1px solid var(--accent);

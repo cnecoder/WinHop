@@ -50,6 +50,8 @@ window.addEventListener("keydown", (e) => {
   if (e.key === "Escape") k = "esc";
   else if (e.key === "ArrowUp") k = "up";
   else if (e.key === "ArrowDown") k = "down";
+  else if (e.key === "PageUp") k = "pageup";
+  else if (e.key === "PageDown") k = "pagedown";
   else if (e.key === "Enter") k = "enter";
   else if (e.ctrlKey && e.code === "Space") k = "hotkey";
   else if (/^[a-zA-Z]$/.test(e.key)) k = "letter:" + e.key.toLowerCase();
@@ -307,18 +309,23 @@ function render(s) {
     lastWinKey = null;
     listEl.className = "";
     titleEl.textContent = "WinTab";
-    titleEl.textContent = "WinTab";
-    listEl.innerHTML = s.programs
-      .map(
-        (p) =>
-          `<div class="row${p.active ? " active" : ""}${p.running ? "" : " off"}" data-key="${p.key}">` +
-          `<span class="key">${p.key}</span>` +
-          `<span class="name">${escapeHtml(p.name)} (${escapeHtml(p.process)})</span>` +
-          `<span class="screen">${p.running ? "×" + p.count : "未运行"}</span>` +
-          (p.configured ? "" : `<button class="add-btn" title="添加进配置">+</button>`) +
-          `</div>`
-      )
-      .join("");
+    const pager =
+      s.page_count > 1
+        ? `<div class="pager">第 ${s.page} / ${s.page_count} 页 · PageUp/PageDown 翻页</div>`
+        : "";
+    listEl.innerHTML =
+      pager +
+      s.programs
+        .map(
+          (p) =>
+            `<div class="row${p.active ? " active" : ""}${p.running ? "" : " off"}" data-key="${p.key}">` +
+            `<span class="key">${p.key}</span>` +
+            `<span class="name">${escapeHtml(p.name)} (${escapeHtml(p.process)})</span>` +
+            `<span class="screen">${p.running ? "×" + p.count : "未运行"}</span>` +
+            (p.configured ? "" : `<button class="add-btn" title="添加进配置">+</button>`) +
+            `</div>`
+        )
+        .join("");
   }
 }
 
