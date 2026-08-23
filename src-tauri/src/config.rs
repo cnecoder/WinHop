@@ -7,6 +7,8 @@ pub struct Config {
     pub elevate: bool,
     #[serde(default = "default_window_order")]
     pub window_order: String,
+    #[serde(default)]
+    pub multi_letter: bool,
     pub programs: Vec<Program>,
 }
 
@@ -91,12 +93,13 @@ pub fn load() -> (Config, std::path::PathBuf) {
             return (cfg, path);
         }
     }
-    // 找不到配置：生成默认配置（自动补全会填充程序列表，开箱即用）
+    // 找不到配置：生成默认配置（常用软件预置别名 + 字母，自动补全补齐其余）
     let default = Config {
         hotkey: "ctrl+space".into(),
         elevate: true,
         window_order: "zorder".into(),
-        programs: Vec::new(),
+        multi_letter: false,
+        programs: default_programs(),
     };
     let json = serde_json::to_string_pretty(&default).expect("序列化默认配置失败");
     if let Some(dir) = appdata.as_ref() {
@@ -120,6 +123,29 @@ pub fn save(cfg: &Config, path: &std::path::Path) -> std::io::Result<()> {
     let text = serde_json::to_string_pretty(cfg)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
     std::fs::write(path, text)
+}
+
+// 预置常用软件别名（key 为字母代号，process 为小写 exe 名）。
+// 用户首次启动即生成；未运行的条目灰色排在末尾，不做启动器。
+fn default_programs() -> Vec<Program> {
+    vec![
+        Program { key: "c".into(), name: "Chrome".into(), process: "chrome.exe".into() },
+        Program { key: "e".into(), name: "Edge".into(), process: "msedge.exe".into() },
+        Program { key: "f".into(), name: "Firefox".into(), process: "firefox.exe".into() },
+        Program { key: "v".into(), name: "VS Code".into(), process: "code.exe".into() },
+        Program { key: "t".into(), name: "终端".into(), process: "windowsterminal.exe".into() },
+        Program { key: "p".into(), name: "PowerShell".into(), process: "powershell.exe".into() },
+        Program { key: "n".into(), name: "记事本".into(), process: "notepad.exe".into() },
+        Program { key: "r".into(), name: "资源管理器".into(), process: "explorer.exe".into() },
+        Program { key: "s".into(), name: "Slack".into(), process: "slack.exe".into() },
+        Program { key: "d".into(), name: "Discord".into(), process: "discord.exe".into() },
+        Program { key: "o".into(), name: "Outlook".into(), process: "outlook.exe".into() },
+        Program { key: "w".into(), name: "Word".into(), process: "winword.exe".into() },
+        Program { key: "x".into(), name: "Excel".into(), process: "excel.exe".into() },
+        Program { key: "y".into(), name: "微信".into(), process: "wechat.exe".into() },
+        Program { key: "q".into(), name: "QQ".into(), process: "qq.exe".into() },
+        Program { key: "z".into(), name: "钉钉".into(), process: "dingtalk.exe".into() },
+    ]
 }
 
 fn validate(cfg: &mut Config) {

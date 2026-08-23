@@ -22,6 +22,8 @@ function renderSettings(state) {
   document.querySelectorAll('input[name="order"]').forEach((r) => {
     r.checked = r.value === order;
   });
+  const ml = document.getElementById("multi-letter");
+  if (ml) ml.checked = !!state.multi_letter;
 }
 
 // 覆盖层夺焦后按键落在本 webview 内部（raw input 内部可达），路由给 Rust 状态机。
@@ -52,6 +54,7 @@ window.addEventListener("keydown", (e) => {
   else if (e.key === "ArrowDown") k = "down";
   else if (e.key === "PageUp") k = "pageup";
   else if (e.key === "PageDown") k = "pagedown";
+  else if (e.key === "Backspace") k = "back";
   else if (e.key === "Enter") k = "enter";
   else if (e.ctrlKey && e.code === "Space") k = "hotkey";
   else if (/^[a-zA-Z]$/.test(e.key)) k = "letter:" + e.key.toLowerCase();
@@ -66,10 +69,10 @@ document.getElementById("settings-btn").addEventListener("click", () => {
 
 // 鼠标点击选择：复用键盘路径——程序层按字母、窗口层按编号
 listEl.addEventListener("click", (e) => {
-  const addBtn = e.target.closest(".add-btn");
-  if (addBtn) {
+  const editBtn = e.target.closest(".edit-btn");
+  if (editBtn) {
     e.stopPropagation();
-    startAddProgram(addBtn);
+    startEditProgram(editBtn);
     return;
   }
   const row = e.target.closest(".row, .wrow");
@@ -81,10 +84,11 @@ listEl.addEventListener("click", (e) => {
   }
 });
 
-// "+" 号：行下方弹出整行面板（字母输入框 + 可用字母提示），Enter 确认入配置
-function startAddProgram(btn) {
+// 统一编辑面板：行下方弹字母 + 名称框，Enter 保存（已配置改键/名，未配置入配置）
+function startEditProgram(btn) {
   const row = btn.closest(".row");
   const prog = state.programs.find((p) => p.key === row.dataset.key) || {};
+  if (!prog.process) return;
 
   const panel = document.createElement("div");
   panel.className = "add-panel";
@@ -96,6 +100,7 @@ function startAddProgram(btn) {
   keyInput.className = "key-input";
   keyInput.maxLength = 1;
   keyInput.placeholder = "字母";
+  keyInput.value = prog.key || "";
 
   const nameInput = document.createElement("input");
   nameInput.className = "name-input";
@@ -104,11 +109,13 @@ function startAddProgram(btn) {
 
   const confirmBtn = document.createElement("button");
   confirmBtn.className = "confirm-btn";
-  confirmBtn.textContent = "确认";
+  confirmBtn.textContent = "保存";
 
-  // 未占用字母 = a-z 减去当前列表所有字母（已配置 + 自动分配）
-  const used = new Set(state.programs.map((p) => p.key));
-  const free = "abcdefghijklmnopqrstuvwxyz".split("").filter((c) => !used.has(c));
+  // 可用字母：a-z 减去其它已配置程序占用的字母（自动补全的临时字母不算占用）
+  const used = new Set(state.programs.filter((p) => p.configured).map((p) => p.key));
+  const free = "abcdefghijklmnopqrstuvwxyz"
+    .split("")
+    .filter((c) => !used.has(c) || c === prog.key);
   const hint = document.createElement("span");
   hint.className = "free-hint";
   hint.appendChild(document.createTextNode("可用字母: "));
@@ -124,30 +131,34 @@ function startAddProgram(btn) {
     hint.appendChild(document.createTextNode(" "));
   }
 
-  const confirmAdd = () => {
-    if (!keyInput.value) {
+  const save = () => {
+    const k = keyInput.value.toLowerCase();
+    const v = nameInput.value.trim();
+    if (!k) {
       keyInput.classList.add("err");
       setTimeout(() => keyInput.classList.remove("err"), 2000);
       return;
     }
-    invoke("add_program", {
-      key: keyInput.value.toLowerCase(),
-      name: nameInput.value.trim() || prog.name || "",
-      process: prog.process || "",
-    }).catch((err) => {
-      keyInput.value = "";
-      keyInput.placeholder = String(err);
+    if (!v) {
+      nameInput.classList.add("err");
+      setTimeout(() => nameInput.classList.remove("err"), 2000);
+      return;
+    }
+    invoke("edit_program", { process: prog.process, key: k, name: v }).catch((err) => {
       keyInput.classList.add("err");
-      setTimeout(() => keyInput.classList.remove("err"), 2000);
+      nameInput.classList.add("err");
+      keyInput.placeholder = String(err);
+      setTimeout(() => {
+        keyInput.classList.remove("err");
+        nameInput.classList.remove("err");
+      }, 2000);
     });
-    // 成功后 Rust 会重建列表（该行变为已配置，+ 号消失）
   };
 
   const onKey = (e) => {
     e.stopPropagation();
-    if (e.key === "Enter") {
-      confirmAdd();
-    } else if (e.key === "Escape") {
+    if (e.key === "Enter") save();
+    else if (e.key === "Escape") {
       panel.remove();
       btn.style.display = "";
     }
@@ -156,7 +167,7 @@ function startAddProgram(btn) {
   nameInput.addEventListener("keydown", onKey);
   confirmBtn.addEventListener("click", (e) => {
     e.stopPropagation();
-    confirmAdd();
+    save();
   });
 
   fields.appendChild(keyInput);
@@ -166,7 +177,8 @@ function startAddProgram(btn) {
   panel.appendChild(hint);
   btn.style.display = "none";
   row.insertAdjacentElement("afterend", panel);
-  keyInput.focus();
+  nameInput.focus();
+  nameInput.select();
 }
 
 let hoverIdx = null;
@@ -258,6 +270,12 @@ document.querySelectorAll('input[name="order"]').forEach((r) => {
   });
 });
 
+document.getElementById("multi-letter").addEventListener("change", (e) => {
+  invoke("set_multi_letter", { on: e.target.checked }).catch((e) =>
+    console.error("设置保存失败:", e)
+  );
+});
+
 document.getElementById("quit-btn").addEventListener("click", () => {
   invoke("quit_app");
 });
@@ -309,21 +327,30 @@ function render(s) {
     lastWinKey = null;
     listEl.className = "";
     titleEl.textContent = "WinTab";
-    const pager =
-      s.page_count > 1
+    const pager = s.filter
+      ? `<div class="pager">筛选 “${escapeHtml(s.filter)}” · Enter 确认 · Esc 清除 · Backspace 删字母</div>`
+      : s.page_count > 1
         ? `<div class="pager">第 ${s.page} / ${s.page_count} 页 · PageUp/PageDown 翻页</div>`
         : "";
     listEl.innerHTML =
       pager +
       s.programs
         .map(
-          (p) =>
-            `<div class="row${p.active ? " active" : ""}${p.running ? "" : " off"}" data-key="${p.key}">` +
-            `<span class="key">${p.key}</span>` +
-            `<span class="name">${escapeHtml(p.name)} (${escapeHtml(p.process)})</span>` +
-            `<span class="screen">${p.running ? "×" + p.count : "未运行"}</span>` +
-            (p.configured ? "" : `<button class="add-btn" title="添加进配置">+</button>`) +
-            `</div>`
+          (p) => {
+            const keyCls = p.configured
+              ? p.running
+                ? "key key-cfg"
+                : "key key-off"
+              : "key key-auto";
+            return (
+              `<div class="row${p.active ? " active" : ""}${p.running ? "" : " off"}" data-key="${p.key}">` +
+              `<span class="${keyCls}">${p.key}</span>` +
+              `<span class="name">${escapeHtml(p.name)} (${escapeHtml(p.process)})</span>` +
+              `<span class="screen">${p.running ? "×" + p.count : "未运行"}</span>` +
+              `<button class="edit-btn" title="编辑">✎</button>` +
+              `</div>`
+            );
+          }
         )
         .join("");
   }

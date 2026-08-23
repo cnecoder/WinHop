@@ -163,6 +163,27 @@ body {
   padding: 1px 0;
 }
 
+/* 已配置 + 运行中：实心高亮 */
+.key.key-cfg {
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  background: rgba(76, 194, 255, 0.15);
+}
+
+/* 动态检测（未配置）：虚线高亮 */
+.key.key-auto {
+  color: var(--accent);
+  border: 1px dashed var(--accent);
+  background: transparent;
+}
+
+/* 已配置但未运行：实线置灰 */
+.key.key-off {
+  color: rgba(255, 255, 255, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: rgba(255, 255, 255, 0.04);
+}
+
 .name {
   flex: 1;
   white-space: normal;
@@ -170,21 +191,24 @@ body {
   line-height: 1.35;
 }
 
-.add-btn {
+.edit-btn {
   background: none;
-  border: 1px solid rgba(76, 194, 255, 0.4);
-  color: var(--accent);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  color: var(--fg);
   border-radius: 4px;
   width: 22px;
   height: 22px;
-  font-size: 14px;
+  font-size: 13px;
   line-height: 1;
   cursor: pointer;
   flex-shrink: 0;
+  opacity: 0.6;
 }
 
-.add-btn:hover {
-  background: rgba(76, 194, 255, 0.2);
+.edit-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  opacity: 1;
 }
 
 .key-input {
@@ -198,7 +222,8 @@ body {
   padding: 1px 0;
 }
 
-.key-input.err {
+.key-input.err,
+.name-input.err {
   border-color: #ff6b6b;
   outline: 1px solid #ff6b6b;
 }

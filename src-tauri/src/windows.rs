@@ -12,8 +12,8 @@ use windows_sys::Win32::Storage::FileSystem::{
 };
 use windows_sys::Win32::System::Console::{SetStdHandle, STD_ERROR_HANDLE};
 use windows_sys::Win32::System::Threading::{
-    AttachThreadInput, CreateMutexW, GetCurrentProcess, GetCurrentProcessId, GetCurrentThreadId,
-    OpenProcess, OpenProcessToken, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
+    CreateMutexW, GetCurrentProcess, GetCurrentProcessId, GetCurrentThreadId, OpenProcess,
+    OpenProcessToken, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     VK_MENU, keybd_event, KEYEVENTF_KEYUP,
@@ -45,6 +45,7 @@ pub enum HookMsg {
     Down,
     PageUp,
     PageDown,
+    Backspace,
     Enter,
     ClickOutside,
 }
@@ -347,49 +348,55 @@ fn monitor_index(hwnd: HWND, monitors: &[Monitor]) -> u32 {
     best
 }
 
+// 激活目标窗口。不使用 AttachThreadInput——它会把调用线程输入队列与目标线程
+// 同步共享，目标线程处理慢时会把调用方（甚至前台线程）一起挂死，表现为光标卡顿、
+// 热键无响应。改用 Alt 注入破解前台锁（让系统认为有用户输入），再 SetForegroundWindow。
+//
+// 注意：调用方须在独立线程执行本函数，且须在覆盖层 emit(visible=false) 收尾之后再启动
+// （见 close() 顺序说明）——若在 WebView2 处理 hide+IPC 期间从外部抢走焦点，会阻塞
+// 主线程，连带挂住鼠标钩子与热键派发。
 pub fn activate(hwnd: isize) -> bool {
     unsafe {
         let h = hwnd as HWND;
         if IsIconic(h) != 0 {
             ShowWindow(h, SW_RESTORE);
         }
-        let fg = GetForegroundWindow();
-        if fg == h {
+        if GetForegroundWindow() == h {
             return true;
         }
-        let mut pid: u32 = 0;
-        let tid = GetWindowThreadProcessId(h, &mut pid);
-        let fg_tid = GetWindowThreadProcessId(fg, std::ptr::null_mut());
-        let our_tid = GetCurrentThreadId();
-        // 前台锁定绕过：输入线程挂到目标线程再激活
-        AttachThreadInput(our_tid, fg_tid, 1);
-        AttachThreadInput(our_tid, tid, 1);
-        SetForegroundWindow(h);
+        // Alt 按下→SetForegroundWindow→BringWindowToTop→Alt 抬起：利用「最近有输入」
+        // 破解前台锁定，顺序不可调换。
+        keybd_event(VK_MENU as u8, 0, 0, 0);
+        let ok = SetForegroundWindow(h);
         BringWindowToTop(h);
-        AttachThreadInput(our_tid, fg_tid, 0);
-        AttachThreadInput(our_tid, tid, 0);
-        GetForegroundWindow() == h
+        keybd_event(VK_MENU as u8, 0, KEYEVENTF_KEYUP, 0);
+        let success = ok != 0 && GetForegroundWindow() == h;
+        if !success {
+            eprintln!(
+                "[t={}] 激活 SetForegroundWindow 失败 hwnd={:#x} ok={} err={}",
+                now_ms(),
+                hwnd,
+                ok,
+                GetLastError()
+            );
+        }
+        success
     }
 }
 
-// 激活校验 + 前台锁破解：失败时注入一次 Alt 刷新「最近输入」状态再试。
-// 必须在覆盖层关闭（visible=false）后调用，否则注入的 Alt 会被自己的钩子吞掉。
-// 注意：目标窗口在另一个虚拟桌面时此方法无效（taskbar 会闪烁但无法显示）。
-// 必须从 run_on_main_thread 的闭包里调用，绝不能在钩子回调内直接执行：
-// SendInput 注入的键需要当前线程的消息泵派发，回调内执行会自我死锁。
+// 激活校验：失败时再注入 Alt 重试一次。
+// 目标窗口在另一个虚拟桌面时无效（taskbar 闪烁但无法显示）。
 pub fn activate_with_retry(hwnd: isize) {
-    eprintln!("[t={}] 激活尝试 hwnd={:#x}", now_ms(), hwnd);
     if activate(hwnd) {
         return;
     }
-    eprintln!("[t={}] 激活失败，注入 Alt 重试", now_ms());
-    unsafe {
-        keybd_event(VK_MENU as u8, 0, 0, 0);
-        keybd_event(VK_MENU as u8, 0, KEYEVENTF_KEYUP, 0);
-    }
     std::thread::sleep(std::time::Duration::from_millis(50));
     if !activate(hwnd) {
-        eprintln!("[t={}] 激活失败 hwnd={:#x}（可能在另一个虚拟桌面）", now_ms(), hwnd);
+        eprintln!(
+            "[t={}] 激活失败 hwnd={:#x}（可能在另一个虚拟桌面）",
+            now_ms(),
+            hwnd
+        );
     }
 }
 
