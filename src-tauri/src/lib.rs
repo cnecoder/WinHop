@@ -27,7 +27,10 @@ const PROG_PAGE_SIZE: usize = 20;
 
 #[derive(Clone)]
 struct ProgEntry {
+    /// 单字母模式代号（空表示仅多字母配置）
     key: String,
+    /// 多字母模式代号（空表示未配置多字母）
+    multi_key: String,
     name: String,
     process: String,
     configured: bool,
@@ -80,6 +83,7 @@ struct Inner {
 #[derive(Serialize, Clone)]
 struct ProgramUi {
     key: String,
+    multi_key: String,
     name: String,
     process: String,
     running: bool,
@@ -111,27 +115,58 @@ struct Render {
     page_count: usize,
 }
 
-// 当前视图索引：多字母模式有输入时按名称/进程名筛选，否则全量
-fn view_indices(ov: &OverlayState, multi: bool) -> Vec<usize> {
-    if multi && !ov.letter_buf.is_empty() {
-        let b = ov.letter_buf.to_lowercase();
-        ov.prog_list
-            .iter()
-            .enumerate()
-            .filter(|(_, e)| {
-                e.name.to_lowercase().contains(&b) || e.process.to_lowercase().contains(&b)
-            })
-            .map(|(i, _)| i)
-            .collect()
-    } else {
-        (0..ov.prog_list.len()).collect()
+// 计算单个条目对输入串的匹配得分：多字母快捷键优先（精确>前缀>子串），
+// 其次名称（精确>前缀>子串），再次进程名（前缀>子串）。0 表示不匹配。
+fn match_score(e: &ProgEntry, q: &str) -> u32 {
+    let mk = e.multi_key.to_lowercase();
+    let name = e.name.to_lowercase();
+    let proc = e.process.to_lowercase();
+    let mut s = 0u32;
+    if !mk.is_empty() {
+        if mk == q {
+            s = s.max(1000);
+        } else if mk.starts_with(q) {
+            s = s.max(800);
+        } else if mk.contains(q) {
+            s = s.max(600);
+        }
     }
+    if name == q {
+        s = s.max(500);
+    } else if name.starts_with(q) {
+        s = s.max(400);
+    } else if name.contains(q) {
+        s = s.max(300);
+    }
+    if proc.starts_with(q) {
+        s = s.max(200);
+    } else if proc.contains(q) {
+        s = s.max(100);
+    }
+    s
 }
 
-// 过滤变化后校正选中：仍在视图内则保持，否则取首个
-fn clamp_sel_to_view(ov: &mut OverlayState, view: &[usize]) {
-    if !view.contains(&ov.prog_sel) {
-        ov.prog_sel = view.first().copied().unwrap_or(ov.prog_sel);
+// 当前视图索引（按显示顺序）。
+// 单字母模式：全量（保持 build_prog_list 的运行中在前顺序）。
+// 多字母模式：无输入时全量；有输入时按匹配得分降序，0 分排除。
+fn view_indices(ov: &OverlayState, multi: bool) -> Vec<usize> {
+    if multi {
+        if ov.letter_buf.is_empty() {
+            (0..ov.prog_list.len()).collect()
+        } else {
+            let q = ov.letter_buf.to_lowercase();
+            let mut scored: Vec<(usize, u32)> = ov
+                .prog_list
+                .iter()
+                .enumerate()
+                .map(|(i, e)| (i, match_score(e, &q)))
+                .filter(|(_, s)| *s > 0)
+                .collect();
+            scored.sort_by(|a, b| b.1.cmp(&a.1));
+            scored.into_iter().map(|(i, _)| i).collect()
+        }
+    } else {
+        (0..ov.prog_list.len()).collect()
     }
 }
 
@@ -185,8 +220,15 @@ fn emit(app: &AppHandle, inner: &Inner, ov: &OverlayState) {
             .get(&p.process)
             .map(|w| w.len())
             .unwrap_or(0);
+        // 多字母模式显示 multi_key，单字母模式显示 key
+        let display_key = if multi {
+            p.multi_key.clone()
+        } else {
+            p.key.clone()
+        };
         render.programs.push(ProgramUi {
-            key: p.key.clone(),
+            key: display_key,
+            multi_key: p.multi_key.clone(),
             name: p.name.clone(),
             process: p.process.clone(),
             running: count > 0,
@@ -199,14 +241,23 @@ fn emit(app: &AppHandle, inner: &Inner, ov: &OverlayState) {
     let _ = app.emit("overlay", &render);
 }
 
-// 已配置程序在前（保持配置字母），未配置的运行中程序按进程名排序补全（取空闲字母）
-fn build_prog_list(cfg: &Config, wins_by_proc: &HashMap<String, Vec<WinInfo>>) -> Vec<ProgEntry> {
+// 构造程序列表。
+// 单字母模式：已配置程序在前（保持配置字母），未配置运行中程序按进程名排序补全空闲单字母，
+//   上限 26（a-z）。
+// 多字母模式：已配置程序（带 multi_key）+ 全部未配置运行中程序（无代号），无数量限制，
+//   匹配/排序交给 view_indices。
+fn build_prog_list(
+    cfg: &Config,
+    wins_by_proc: &HashMap<String, Vec<WinInfo>>,
+    multi: bool,
+) -> Vec<ProgEntry> {
     let mut list: Vec<ProgEntry> = Vec::new();
     let mut used: HashSet<String> = HashSet::new();
     for p in &cfg.programs {
         used.insert(p.key.clone());
         list.push(ProgEntry {
             key: p.key.clone(),
+            multi_key: p.multi_key.clone(),
             name: p.name.clone(),
             process: p.process.clone(),
             configured: true,
@@ -218,34 +269,42 @@ fn build_prog_list(cfg: &Config, wins_by_proc: &HashMap<String, Vec<WinInfo>>) -
         .collect();
     autos.sort();
     for proc in autos {
-        let letter = ('a'..='z').find(|c| !used.contains(&c.to_string()));
-        if let Some(l) = letter {
-            used.insert(l.to_string());
-            // 显示名 = 版本资源 FileDescription（与任务管理器「文件说明」同源），
-            // 无则用 exe 文件名（保留大小写）
-            let path = wins_by_proc.get(proc).and_then(|wins| wins.first()).map(|w| w.path.clone());
-            let stem = path
-                .as_deref()
-                .and_then(|p| p.rsplit('\\').next())
-                .unwrap_or(proc)
-                .trim_end_matches(".exe")
-                .to_string();
-            let name = path
-                .as_deref()
-                .and_then(windows::file_description)
-                .unwrap_or(stem);
-            list.push(ProgEntry {
-                key: l.to_string(),
-                name,
-                process: proc.clone(),
-                configured: false,
-            });
+        // 多字母模式：不自动分配单字母，全部纳入；单字母模式：取空闲字母，耗尽则停
+        let letter = if multi {
+            None
         } else {
-            break; // 字母耗尽，不再补全
+            ('a'..='z').find(|c| !used.contains(&c.to_string()))
+        };
+        if !multi {
+            if let Some(l) = letter {
+                used.insert(l.to_string());
+            } else {
+                break; // 字母耗尽，不再补全
+            }
         }
+        let path = wins_by_proc.get(proc).and_then(|wins| wins.first()).map(|w| w.path.clone());
+        let stem = path
+            .as_deref()
+            .and_then(|p| p.rsplit('\\').next())
+            .unwrap_or(proc)
+            .trim_end_matches(".exe")
+            .to_string();
+        let name = path
+            .as_deref()
+            .and_then(windows::file_description)
+            .unwrap_or(stem);
+        list.push(ProgEntry {
+            key: letter.map(|c| c.to_string()).unwrap_or_default(),
+            multi_key: String::new(),
+            name,
+            process: proc.clone(),
+            configured: false,
+        });
     }
-    // 字母 a-z 共 26 个上限；超过的程序不再补全（前端 PageUp/PageDown 分页，每页 20 个）
-    list.truncate(26);
+    if !multi {
+        // 单字母模式受 a-z 上限
+        list.truncate(26);
+    }
     // 未运行的配置程序排到最后（运行中在前：配置序、自动补全次之；稳定排序保持组内顺序）
     list.sort_by_key(|e| {
         let running = wins_by_proc
@@ -274,7 +333,7 @@ fn open(app: &AppHandle) {
     let mut ov = inner.overlay.lock().unwrap();
     ov.phase = Phase::Programs;
     let cfg = inner.cfg.lock().unwrap().clone();
-    ov.prog_list = build_prog_list(&cfg, &wins_by_proc);
+    ov.prog_list = build_prog_list(&cfg, &wins_by_proc, cfg.multi_letter);
     ov.wins_by_proc = wins_by_proc;
     ov.prog_sel = 0;
     ov.prog_page = 0;
@@ -435,9 +494,12 @@ fn select_entry(app: &AppHandle, inner: &Inner, ov: &mut OverlayState, entry: &P
     }
 }
 
-// 确保 prog_page 是 prog_sel 所在页
-fn sync_page(ov: &mut OverlayState) {
-    ov.prog_page = ov.prog_sel / PROG_PAGE_SIZE;
+// 确保 prog_page 是 prog_sel 在当前视图中所在页（视图在多字母模式下会被筛选/重排）
+fn sync_page(ov: &mut OverlayState, multi: bool) {
+    let view = view_indices(ov, multi);
+    if let Some(pos) = view.iter().position(|&i| i == ov.prog_sel) {
+        ov.prog_page = pos / PROG_PAGE_SIZE;
+    }
 }
 
 fn select_by_letter(app: &AppHandle, inner: &Inner, ov: &mut OverlayState, c: char) -> bool {
@@ -452,7 +514,8 @@ fn select_by_letter(app: &AppHandle, inner: &Inner, ov: &mut OverlayState, c: ch
         return false;
     };
     ov.prog_sel = idx;
-    sync_page(ov);
+    let multi = inner.cfg.lock().unwrap().multi_letter;
+    sync_page(&mut *ov, multi);
     select_entry(app, inner, ov, &entry)
 }
 
@@ -526,41 +589,68 @@ fn quit_app(app: AppHandle) {
     app.exit(0);
 }
 
-// 编辑程序（已配置改字母/名称；未配置添加进配置）。按 process 匹配
+// 编辑程序（已配置改代号/名称；未配置添加进配置）。按 process 匹配。
+// multi=true 时写 multi_key（多字母代号，1+ 小写字母），否则写 key（单字母）。
 #[tauri::command]
 fn edit_program(
     app: AppHandle,
     process: String,
     key: String,
+    multi: bool,
     name: String,
 ) -> Result<(), String> {
     let name = name.trim();
     if name.is_empty() {
         return Err("名称不能为空".into());
     }
-    if key.len() != 1 || !key.as_bytes()[0].is_ascii_lowercase() {
-        return Err("字母必须是单个小写字母".into());
+    // 单字母模式 key 必填且单字母；多字母模式 multi_key 可空（只按名称匹配），非空则全小写
+    if !key.is_empty() && !key.bytes().all(|b| b.is_ascii_lowercase()) {
+        return Err("代号必须全为小写字母".into());
+    }
+    if !multi && key.len() != 1 {
+        return Err("单字母模式代号必须是单个字母".into());
     }
     let inner = app.state::<Inner>();
     {
         let mut cfg = inner.cfg.lock().unwrap();
         if let Some(idx) = cfg.programs.iter().position(|p| p.process == process) {
-            let conflict = cfg
-                .programs
-                .iter()
-                .enumerate()
-                .any(|(j, p)| j != idx && p.key == key);
-            if conflict {
-                return Err(format!("字母「{}」已被占用", key));
+            if multi {
+                if !key.is_empty() {
+                    let conflict = cfg
+                        .programs
+                        .iter()
+                        .enumerate()
+                        .any(|(j, p)| j != idx && p.multi_key == key);
+                    if conflict {
+                        return Err(format!("多字母代号「{}」已被占用", key));
+                    }
+                }
+                cfg.programs[idx].multi_key = key.clone();
+            } else {
+                let conflict = cfg
+                    .programs
+                    .iter()
+                    .enumerate()
+                    .any(|(j, p)| j != idx && p.key == key);
+                if conflict {
+                    return Err(format!("字母「{}」已被占用", key));
+                }
+                cfg.programs[idx].key = key.clone();
             }
-            cfg.programs[idx].key = key.clone();
             cfg.programs[idx].name = name.to_string();
         } else {
-            if cfg.programs.iter().any(|p| p.key == key) {
-                return Err(format!("字母「{}」已被占用", key));
+            // 新增：另一模式的代号留空
+            let conflict = if multi {
+                !key.is_empty() && cfg.programs.iter().any(|p| p.multi_key == key)
+            } else {
+                cfg.programs.iter().any(|p| p.key == key)
+            };
+            if conflict {
+                return Err(format!("代号「{}」已被占用", key));
             }
             cfg.programs.push(Program {
-                key: key.clone(),
+                key: if multi { String::new() } else { key.clone() },
+                multi_key: if multi { key.clone() } else { String::new() },
                 name: name.to_string(),
                 process: process.clone(),
             });
@@ -568,21 +658,58 @@ fn edit_program(
         config::save(&cfg, &inner.cfg_path).map_err(|e| format!("保存配置失败: {}", e))?;
     }
     eprintln!(
-        "[t={}] 编辑程序 {} ({}) key={}",
+        "[t={}] 编辑程序 {} ({}) {}={}",
         windows::now_ms(),
         name,
         process,
+        if multi { "multi_key" } else { "key" },
         key
     );
     if inner.visible.load(Ordering::Relaxed) {
         let mut ov = inner.overlay.lock().unwrap();
         let cfg = inner.cfg.lock().unwrap().clone();
-        ov.prog_list = build_prog_list(&cfg, &ov.wins_by_proc);
+        ov.prog_list = build_prog_list(&cfg, &ov.wins_by_proc, cfg.multi_letter);
         ov.prog_sel = 0;
         ov.prog_page = 0;
+        ov.letter_buf.clear();
         emit(&app, &inner, &ov);
     }
     Ok(())
+}
+
+// 点击程序行：按 process 选中当前高亮项之外的任意行（多字母模式代号可能多字母，
+// 不能复用 letter 路径）。若该行已高亮则等同 Enter 确认。
+#[tauri::command]
+fn pick_program(app: AppHandle, process: String) {
+    let inner = app.state::<Inner>();
+    if !inner.visible.load(Ordering::Relaxed) {
+        return;
+    }
+    let mut ov = inner.overlay.lock().unwrap();
+    if ov.phase != Phase::Programs || ov.prog_list.is_empty() {
+        return;
+    }
+    let multi = inner.cfg.lock().unwrap().multi_letter;
+    let view = view_indices(&ov, multi);
+    let Some(pos) = view
+        .iter()
+        .position(|&i| ov.prog_list[i].process == process)
+    else {
+        return;
+    };
+    let target = view[pos];
+    let entry = ov.prog_list[target].clone();
+    // 点击已高亮项 = 确认；否则只移动高亮
+    if target == ov.prog_sel {
+        if select_entry(&app, &inner, &mut ov, &entry) {
+            drop(ov);
+            close(&app);
+        }
+    } else {
+        ov.prog_sel = target;
+        sync_page(&mut ov, multi);
+        emit(&app, &inner, &ov);
+    }
 }
 
 // 设置界面：开关多字母模式，立即落盘
@@ -597,8 +724,11 @@ fn set_multi_letter(app: AppHandle, on: bool) -> Result<(), String> {
     eprintln!("[t={}] 多字母模式 = {}", windows::now_ms(), on);
     if inner.visible.load(Ordering::Relaxed) {
         let mut ov = inner.overlay.lock().unwrap();
-        ov.letter_buf.clear();
+        let cfg = inner.cfg.lock().unwrap().clone();
+        ov.prog_list = build_prog_list(&cfg, &ov.wins_by_proc, cfg.multi_letter);
+        ov.prog_sel = 0;
         ov.prog_page = 0;
+        ov.letter_buf.clear();
         emit(&app, &inner, &ov);
     }
     Ok(())
@@ -675,10 +805,9 @@ fn handle_key(app: &AppHandle, msg: HookMsg) {
                     return;
                 }
                 ov.letter_buf.push(c);
-                {
-                    let v = view_indices(&ov, true);
-                    clamp_sel_to_view(&mut ov, &v);
-                }
+                // 选中匹配度最高的（列表第一个）
+                let v = view_indices(&ov, true);
+                ov.prog_sel = v.first().copied().unwrap_or(ov.prog_sel);
                 ov.prog_page = 0;
                 emit(app, &inner, &ov);
             } else if select_by_letter(app, &inner, &mut ov, c) {
@@ -689,9 +818,11 @@ fn handle_key(app: &AppHandle, msg: HookMsg) {
         HookMsg::Backspace => {
             if ov.phase == Phase::Programs && !ov.letter_buf.is_empty() {
                 ov.letter_buf.pop();
-                {
-                    let v = view_indices(&ov, true);
-                    clamp_sel_to_view(&mut ov, &v);
+                let v = view_indices(&ov, true);
+                if v.contains(&ov.prog_sel) {
+                    // 当前选中仍在结果内则保留
+                } else {
+                    ov.prog_sel = v.first().copied().unwrap_or(ov.prog_sel);
                 }
                 ov.prog_page = 0;
                 emit(app, &inner, &ov);
@@ -725,7 +856,7 @@ fn handle_key(app: &AppHandle, msg: HookMsg) {
                     let len = view.len() as isize;
                     let new_pos = ((pos as isize + delta + len) % len) as usize;
                     ov.prog_sel = view[new_pos];
-                    sync_page(&mut ov);
+                    sync_page(&mut ov, multi);
                     emit(app, &inner, &ov);
                 }
                 Phase::Windows if !ov.wins.is_empty() => {
@@ -774,9 +905,20 @@ fn handle_key(app: &AppHandle, msg: HookMsg) {
                     if ov.prog_list.is_empty() {
                         false
                     } else {
-                        let idx = ov.prog_sel.min(ov.prog_list.len() - 1);
-                        let entry = ov.prog_list[idx].clone();
-                        select_entry(app, &inner, &mut ov, &entry)
+                        let multi = inner.cfg.lock().unwrap().multi_letter;
+                        let view = view_indices(&ov, multi);
+                        if view.is_empty() {
+                            false // 无匹配，Enter 无动作
+                        } else {
+                            // 多字母筛选后 prog_sel 已是匹配最高项；若不在视图内（边界情况）取首项
+                            let idx = if view.contains(&ov.prog_sel) {
+                                ov.prog_sel
+                            } else {
+                                view[0]
+                            };
+                            let entry = ov.prog_list[idx].clone();
+                            select_entry(app, &inner, &mut ov, &entry)
+                        }
                     }
                 }
                 Phase::Windows => {
@@ -833,7 +975,8 @@ pub fn run() {
             quit_app,
             window_thumbnail,
             toggle_fullscreen,
-            edit_program
+            edit_program,
+            pick_program
         ])
         .setup(move |app| {
             let visible = Arc::new(AtomicBool::new(false));

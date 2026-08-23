@@ -49,10 +49,43 @@ body {
   font-weight: 600;
 }
 
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .header-right {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+.header-sep {
+  width: 1px;
+  height: 16px;
+  background: rgba(255, 255, 255, 0.2);
+}
+
+#legend {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--dim);
+  white-space: nowrap;
+}
+
+#legend .key.demo {
+  width: 18px;
+  height: 18px;
+  padding: 0;
 }
 
 #hint {
@@ -133,12 +166,89 @@ body {
   gap: 6px;
 }
 
-.pager {
-  text-align: center;
-  color: var(--muted, #8a93a6);
+/* 模式徽章：紧贴 WinTab 标题右侧 */
+.mode-badge {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 8px;
+  border-radius: 9px;
+  letter-spacing: 0.5px;
+}
+
+.mode-single {
+  color: var(--dim);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.mode-multi {
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  background: rgba(0, 255, 102, 0.1);
+}
+
+/* 工具条：左筛选、右分页，同一行两端对齐 */
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 0 10px;
+}
+
+.filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.filter-label {
   font-size: 13px;
-  padding: 4px 0 8px;
-  opacity: 0.85;
+  color: var(--dim);
+}
+
+.filter-box {
+  width: 200px;
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  font-family: Consolas, monospace;
+  font-size: 16px;
+  color: var(--fg);
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(0, 255, 102, 0.35);
+  border-radius: 5px;
+}
+
+.filter-box.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent), 0 0 12px rgba(0, 255, 102, 0.25);
+  background: rgba(0, 255, 102, 0.08);
+}
+
+.caret {
+  color: var(--accent);
+  font-weight: 700;
+  animation: blink 1s steps(2) infinite;
+  margin-left: 1px;
+}
+
+@keyframes blink {
+  50% { opacity: 0; }
+}
+
+.filter-hint {
+  font-size: 12px;
+  color: var(--dim);
+}
+
+.pager {
+  text-align: right;
+  color: var(--dim);
+  font-size: 13px;
+  white-space: nowrap;
 }
 
 .row.active {
@@ -152,7 +262,8 @@ body {
 }
 
 .key {
-  width: 26px;
+  min-width: 26px;
+  padding: 1px 8px;
   text-align: center;
   font-family: Consolas, monospace;
   font-weight: 700;
@@ -160,7 +271,18 @@ body {
   color: var(--accent);
   border: 1px solid rgba(76, 194, 255, 0.4);
   border-radius: 5px;
-  padding: 1px 0;
+}
+
+/* 多字母代号：自适应宽度，不强制 26px */
+.key.key-wide {
+  min-width: 42px;
+}
+
+/* 未配置代号（多字母模式下未分配 multi_key）：无框占位 */
+.key.key-empty {
+  border-color: transparent;
+  background: transparent;
+  color: var(--dim);
 }
 
 /* 已配置 + 运行中：实心高亮 */

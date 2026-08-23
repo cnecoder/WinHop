@@ -22,7 +22,12 @@ fn default_window_order() -> String {
 
 #[derive(Deserialize, Serialize, Clone)]
 pub struct Program {
+    /// 单字母模式快捷键（单个小写字母，可为空——仅配置了多字母的程序）
+    #[serde(default)]
     pub key: String,
+    /// 多字母模式快捷键（1+ 小写字母，可为空）
+    #[serde(default)]
+    pub multi_key: String,
     pub name: String,
     pub process: String,
 }
@@ -34,9 +39,11 @@ fn read_cfg(path: &std::path::Path) -> Config {
     let mut cfg: Config = serde_json::from_str(&text)
         .unwrap_or_else(|e| panic!("解析 {} 失败: {}", path.display(), e));
     validate(&mut cfg);
-    // 枚举结果统一小写，配置进程名同样归一化，避免大小写不匹配
+    // 枚举结果统一小写，配置键名/进程名同样归一化，避免大小写不匹配
     for p in &mut cfg.programs {
         p.process = p.process.to_lowercase();
+        p.key = p.key.to_lowercase();
+        p.multi_key = p.multi_key.to_lowercase();
     }
     cfg
 }
@@ -125,26 +132,32 @@ pub fn save(cfg: &Config, path: &std::path::Path) -> std::io::Result<()> {
     std::fs::write(path, text)
 }
 
-// 预置常用软件别名（key 为字母代号，process 为小写 exe 名）。
+// 预置常用软件别名：key 为单字母模式代号，multi_key 为多字母模式代号，process 为小写 exe 名。
 // 用户首次启动即生成；未运行的条目灰色排在末尾，不做启动器。
 fn default_programs() -> Vec<Program> {
+    let p = |key: &str, mk: &str, name: &str, proc: &str| Program {
+        key: key.into(),
+        multi_key: mk.into(),
+        name: name.into(),
+        process: proc.into(),
+    };
     vec![
-        Program { key: "c".into(), name: "Chrome".into(), process: "chrome.exe".into() },
-        Program { key: "e".into(), name: "Edge".into(), process: "msedge.exe".into() },
-        Program { key: "f".into(), name: "Firefox".into(), process: "firefox.exe".into() },
-        Program { key: "v".into(), name: "VS Code".into(), process: "code.exe".into() },
-        Program { key: "t".into(), name: "终端".into(), process: "windowsterminal.exe".into() },
-        Program { key: "p".into(), name: "PowerShell".into(), process: "powershell.exe".into() },
-        Program { key: "n".into(), name: "记事本".into(), process: "notepad.exe".into() },
-        Program { key: "r".into(), name: "资源管理器".into(), process: "explorer.exe".into() },
-        Program { key: "s".into(), name: "Slack".into(), process: "slack.exe".into() },
-        Program { key: "d".into(), name: "Discord".into(), process: "discord.exe".into() },
-        Program { key: "o".into(), name: "Outlook".into(), process: "outlook.exe".into() },
-        Program { key: "w".into(), name: "Word".into(), process: "winword.exe".into() },
-        Program { key: "x".into(), name: "Excel".into(), process: "excel.exe".into() },
-        Program { key: "y".into(), name: "微信".into(), process: "wechat.exe".into() },
-        Program { key: "q".into(), name: "QQ".into(), process: "qq.exe".into() },
-        Program { key: "z".into(), name: "钉钉".into(), process: "dingtalk.exe".into() },
+        p("c", "ch", "Chrome", "chrome.exe"),
+        p("e", "ed", "Edge", "msedge.exe"),
+        p("f", "ff", "Firefox", "firefox.exe"),
+        p("v", "vs", "VS Code", "code.exe"),
+        p("t", "te", "终端", "windowsterminal.exe"),
+        p("p", "ps", "PowerShell", "powershell.exe"),
+        p("n", "no", "记事本", "notepad.exe"),
+        p("r", "ex", "资源管理器", "explorer.exe"),
+        p("s", "sl", "Slack", "slack.exe"),
+        p("d", "di", "Discord", "discord.exe"),
+        p("o", "ou", "Outlook", "outlook.exe"),
+        p("w", "wo", "Word", "winword.exe"),
+        p("x", "xl", "Excel", "excel.exe"),
+        p("y", "wx", "微信", "wechat.exe"),
+        p("q", "qq", "QQ", "qq.exe"),
+        p("z", "dd", "钉钉", "dingtalk.exe"),
     ]
 }
 
@@ -156,13 +169,26 @@ fn validate(cfg: &mut Config) {
         );
         cfg.window_order = "zorder".into();
     }
-    let mut seen = std::collections::HashSet::new();
+    let mut seen_key = std::collections::HashSet::new();
+    let mut seen_mk = std::collections::HashSet::new();
     for p in &cfg.programs {
-        if p.key.len() != 1 || !p.key.as_bytes()[0].is_ascii_lowercase() {
-            panic!("程序「{}」的 key 必须是单个小写字母，当前为 {:?}", p.name, p.key);
+        // key：可为空（仅用多字母），非空则必须单小写字母且唯一
+        if !p.key.is_empty() {
+            if p.key.len() != 1 || !p.key.as_bytes()[0].is_ascii_lowercase() {
+                panic!("程序「{}」的单字母代号必须是单个小写字母，当前为 {:?}", p.name, p.key);
+            }
+            if !seen_key.insert(p.key.clone()) {
+                panic!("单字母代号重复: {}", p.key);
+            }
         }
-        if !seen.insert(p.key.clone()) {
-            panic!("字母代号重复: {}", p.key);
+        // multi_key：可为空（仅用单字母），非空则全小写字母且唯一
+        if !p.multi_key.is_empty() {
+            if !p.multi_key.bytes().all(|b| b.is_ascii_lowercase()) {
+                panic!("程序「{}」的多字母代号必须全为小写字母，当前为 {:?}", p.name, p.multi_key);
+            }
+            if !seen_mk.insert(p.multi_key.clone()) {
+                panic!("多字母代号重复: {}", p.multi_key);
+            }
         }
     }
 }
