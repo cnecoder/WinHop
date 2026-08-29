@@ -494,19 +494,27 @@ function render(s) {
     lastWinKey = null;
     listEl.className = "";
     titleEl.textContent = "WinHop";
+    // 多字母筛选无匹配：显示空状态提示，且不显示翻页
+    const noMatch = s.multi_letter && s.filter && s.programs.length === 0;
     // 工具条：左侧筛选（多字母模式），右侧分页/翻页提示，同一行两端对齐
     const filterLeft = s.multi_letter
       ? `<div class="filter-bar">
            <span class="filter-label">筛选</span>
            <span class="filter-box${s.filter ? " active" : ""}">${escapeHtml(s.filter)}<span class="caret">▏</span></span>
-           <span class="filter-hint">Enter 确认 · Esc 清除 · Backspace</span>
+           <span class="filter-hint">Enter 确认，Esc 清除，Backspace 删除</span>
          </div>`
       : `<span></span>`;
-    const pageRight = s.page_count > 1
-      ? `第 ${s.page} / ${s.page_count} 页 · PageUp/PageDown 翻页`
-      : `PageUp/PageDown 翻页`;
+    const pageRight = noMatch
+      ? ""
+      : s.page_count > 1
+        ? `第 ${s.page} / ${s.page_count} 页 · PageUp/PageDown 翻页`
+        : `PageUp/PageDown 翻页`;
+    const emptyHint = noMatch
+      ? `<div class="empty-hint"><span class="key key-empty">·</span><span>无匹配「${escapeHtml(s.filter)}」，Esc 清除筛选</span></div>`
+      : "";
     listEl.innerHTML =
       `<div class="toolbar">${filterLeft}<span class="pager">${pageRight}</span></div>` +
+      emptyHint +
       s.programs
         .map(
           (p) => {

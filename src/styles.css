@@ -1,38 +1,48 @@
-/* 皮肤系统：所有颜色走变量。新增主题 = 加一个 [data-theme="xxx"] 变量块，
-   并在 Rust config::THEMES 与 lib.rs theme_name 登记。:root 默认即黑绿主题。 */
-:root,
-[data-theme="black-green"] {
-  --bg: #000000;
-  --bg-rgb: 0, 0, 0;
-  --fg: #e6e9f2;
-  --dim: #9aa3b5;
-  --accent: #00ff66;
-  --accent-rgb: 0, 255, 102;
-  --off: #5c6474;
-  /* 代号徽章底色（黑绿主题用蓝色与绿色 accent 拉开层次） */
-  --key-rgb: 76, 194, 255;
-  /* 分隔线/悬停遮罩（深色主题为白色半透明） */
+/* 皮肤系统：所有颜色走变量。新增主题 = 加一个 [data-theme="xxx"] 颜色变量块，
+   并在 Rust config::THEMES 与 lib.rs theme_name 登记。尺度/动效/字体令牌在 :root，与主题无关。 */
+
+/* ===== 字体：用系统原生字体栈（Windows 中西文自动配对，不打包 webfont） ===== */
+
+/* ===== 主题无关令牌：圆角阶梯 / 动效 / 字体栈 / 中性底色 ===== */
+:root {
+  --r-sm: 4px;      /* 徽章、缩略图 */
+  --r-control: 6px; /* 按钮、输入框、徽章标签 */
+  --r-row: 6px;     /* 列表行 */
+  --r-panel: 8px;   /* 面板、预览、弹窗 */
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur: 140ms;
+  /* Windows 原生：西文 Segoe UI / 中文 Microsoft YaHei 自动配对；等宽 Consolas / Cascadia Mono */
+  --font-sans: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  --font-mono: Consolas, "Cascadia Mono", "Microsoft YaHei", ui-monospace, monospace;
+
+  /* 底色/表面/正文文字均为中性，不带主题色，所有主题共享；主题只换 accent */
+  --bg: #0b0c0f;
+  --bg-rgb: 11, 12, 15;
+  --surface: #12141a;
+  --surface-2: #0d0f14;
   --line-rgb: 255, 255, 255;
-  /* 实心按钮上的文字色、错误红、面板底（缩略图/弹窗） */
-  --on-accent: #001a0a;
   --error: #ff6b6b;
-  --panel: #111111;
+  --panel: var(--surface);
+  --fg: #e8ebf1;
+  --dim: #9aa3b5;
+  --off: #5b6475;
 }
 
-/* 黑黄主题：黑底 + 亮姜黄 accent，暖白文字；徽章与 accent 同色，整体单色 */
+/* ===== 黑绿主题（默认）：只覆盖 accent ===== */
+:root,
+[data-theme="black-green"] {
+  --accent: #35d07a;
+  --accent-rgb: 53, 208, 122;
+  --accent-strong: #48e08c;
+  --on-accent: #04240f;
+}
+
+/* ===== 黑黄主题：中性底 + 中性文字，仅 accent 为琥珀 ===== */
 [data-theme="black-yellow"] {
-  --bg: #000000;
-  --bg-rgb: 0, 0, 0;
-  --fg: #f5efda;
-  --dim: #b3aa8f;
-  --accent: #fedf0a;
-  --accent-rgb: 254, 223, 10;
-  --off: #6f6852;
-  --key-rgb: 255, 179, 0;
-  --line-rgb: 255, 255, 255;
-  --on-accent: #1f1700;
-  --error: #ff6b6b;
-  --panel: #161305;
+  --accent: #fbbf24;
+  --accent-rgb: 251, 191, 36;
+  --accent-strong: #fcd34d;
+  --on-accent: #241a02;
 }
 
 * {
@@ -45,7 +55,8 @@
 html,
 body {
   background: transparent;
-  font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
   color: var(--fg);
   overflow: hidden;
 }
@@ -57,6 +68,7 @@ body {
   box-sizing: border-box;
   background: var(--bg);
   padding: 24px 36px;
+  animation: overlay-in var(--dur) var(--ease);
 }
 
 #header,
@@ -76,6 +88,7 @@ body {
 #title {
   font-size: 18px;
   font-weight: 600;
+  letter-spacing: 0.02em;
 }
 
 .header-left {
@@ -126,17 +139,16 @@ body {
   background: rgba(var(--accent-rgb), 0.08);
   border: 1px solid rgba(var(--accent-rgb), 0.5);
   color: var(--accent);
-  border-radius: 5px;
+  border-radius: var(--r-control);
   padding: 2px 10px;
   font-size: 12px;
   cursor: pointer;
-  transition: background 0.12s, box-shadow 0.12s;
+  transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease);
 }
 
 #settings-btn:hover {
-  background: rgba(var(--accent-rgb), 0.18);
+  background: rgba(var(--accent-rgb), 0.16);
   border-color: var(--accent);
-  box-shadow: 0 0 8px rgba(var(--accent-rgb), 0.35);
 }
 
 #list {
@@ -148,8 +160,9 @@ body {
   align-items: center;
   gap: 16px;
   padding: 10px 12px;
-  border-radius: 6px;
+  border-radius: var(--r-row);
   font-size: 17px;
+  transition: background var(--dur) var(--ease);
 }
 
 #list:not(.window-layer) {
@@ -163,7 +176,7 @@ body {
   font-size: 11px;
   font-weight: 700;
   padding: 1px 8px;
-  border-radius: 9px;
+  border-radius: var(--r-control);
   letter-spacing: 0.5px;
 }
 
@@ -176,7 +189,7 @@ body {
 .mode-multi {
   color: var(--accent);
   border: 1px solid var(--accent);
-  background: rgba(var(--accent-rgb), 0.1);
+  background: rgba(var(--accent-rgb), 0.12);
 }
 
 /* 工具条：左筛选、右分页，同一行两端对齐 */
@@ -206,18 +219,19 @@ body {
   display: inline-flex;
   align-items: center;
   padding: 2px 10px;
-  font-family: Consolas, monospace;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
   font-size: 16px;
   color: var(--fg);
-  background: rgba(var(--bg-rgb), 0.35);
-  border: 1px solid rgba(var(--accent-rgb), 0.35);
-  border-radius: 5px;
+  background: var(--surface-2);
+  border: 1px solid rgba(var(--line-rgb), 0.16);
+  border-radius: var(--r-control);
 }
 
 .filter-box.active {
   border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent), 0 0 12px rgba(var(--accent-rgb), 0.25);
-  background: rgba(var(--accent-rgb), 0.08);
+  box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), 0.3);
+  background: rgba(var(--accent-rgb), 0.05);
 }
 
 .caret {
@@ -240,16 +254,19 @@ body {
   text-align: right;
   color: var(--dim);
   font-size: 13px;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
+/* 选中态：tint 填充 + inset 内描边（非外发光、非硬 outline） */
 .row.active {
-  background: rgba(var(--accent-rgb), 0.14);
-  outline: 1px solid var(--accent);
+  background: rgba(var(--accent-rgb), 0.12);
+  box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), 0.45);
 }
 
 .row:hover {
-  background: rgba(var(--line-rgb), 0.08);
+  background: rgba(var(--line-rgb), 0.07);
   cursor: pointer;
 }
 
@@ -257,12 +274,13 @@ body {
   min-width: 26px;
   padding: 1px 8px;
   text-align: center;
-  font-family: Consolas, monospace;
-  font-weight: 700;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
   font-size: 16px;
   color: var(--accent);
-  border: 1px solid rgba(var(--key-rgb), 0.4);
-  border-radius: 5px;
+  border: 1px solid rgba(var(--accent-rgb), 0.4);
+  border-radius: var(--r-sm);
 }
 
 /* 多字母代号：自适应宽度，不强制 26px */
@@ -281,7 +299,7 @@ body {
 .key.key-cfg {
   color: var(--accent);
   border: 1px solid var(--accent);
-  background: rgba(var(--key-rgb), 0.15);
+  background: rgba(var(--accent-rgb), 0.18);
 }
 
 /* 动态检测（未配置）：虚线高亮 */
@@ -295,7 +313,7 @@ body {
 .key.key-off {
   color: rgba(var(--line-rgb), 0.45);
   border: 1px solid rgba(var(--line-rgb), 0.25);
-  background: rgba(var(--line-rgb), 0.04);
+  background: rgba(var(--line-rgb), 0.05);
 }
 
 .name {
@@ -309,14 +327,16 @@ body {
   background: none;
   border: 1px solid rgba(var(--line-rgb), 0.25);
   color: var(--fg);
-  border-radius: 4px;
+  border-radius: var(--r-control);
   width: 22px;
   height: 22px;
   font-size: 13px;
   line-height: 1;
   cursor: pointer;
   flex-shrink: 0;
-  opacity: 0.6;
+  opacity: 0.55;
+  transition: color var(--dur) var(--ease), opacity var(--dur) var(--ease),
+    border-color var(--dur) var(--ease);
 }
 
 .edit-btn:hover {
@@ -327,10 +347,10 @@ body {
 
 .key-input {
   width: 46px;
-  background: rgba(var(--bg-rgb), 0.4);
+  background: var(--surface-2);
   border: 1px solid var(--accent);
   color: var(--fg);
-  border-radius: 4px;
+  border-radius: var(--r-control);
   font-size: 14px;
   text-align: center;
   padding: 1px 0;
@@ -339,7 +359,7 @@ body {
 .key-input.err,
 .name-input.err {
   border-color: var(--error);
-  outline: 1px solid var(--error);
+  box-shadow: inset 0 0 0 1px var(--error);
 }
 
 .add-panel {
@@ -358,10 +378,10 @@ body {
 
 .name-input {
   flex: 1;
-  background: rgba(var(--bg-rgb), 0.4);
+  background: var(--surface-2);
   border: 1px solid rgba(var(--line-rgb), 0.2);
   color: var(--fg);
-  border-radius: 4px;
+  border-radius: var(--r-control);
   font-size: 14px;
   padding: 3px 8px;
 }
@@ -372,17 +392,18 @@ body {
 }
 
 .confirm-btn {
-  background: rgba(var(--key-rgb), 0.15);
+  background: rgba(var(--accent-rgb), 0.14);
   border: 1px solid var(--accent);
   color: var(--accent);
-  border-radius: 4px;
+  border-radius: var(--r-control);
   font-size: 13px;
   padding: 3px 14px;
   cursor: pointer;
+  transition: background var(--dur) var(--ease);
 }
 
 .confirm-btn:hover {
-  background: rgba(var(--key-rgb), 0.3);
+  background: rgba(var(--accent-rgb), 0.26);
 }
 
 .free-hint {
@@ -396,7 +417,8 @@ body {
 .free-hint b {
   color: var(--accent);
   cursor: pointer;
-  font-family: Consolas, monospace;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
   padding: 0 1px;
 }
 
@@ -407,7 +429,8 @@ body {
 .screen {
   font-size: 12px;
   color: var(--dim);
-  font-family: Consolas, monospace;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
 }
 
 .row.off .key {
@@ -418,6 +441,17 @@ body {
 .row.off .name,
 .row.off .screen {
   color: var(--off);
+}
+
+/* 无匹配空状态（多字母筛选无结果）：扁平提示行 */
+.empty-hint {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: var(--r-row);
+  color: var(--dim);
+  font-size: 15px;
 }
 
 /* 窗口层：左列表 + 右侧大缩略图预览（撑满全屏宽，列表贴最左，预览占约 3/4 屏） */
@@ -440,10 +474,11 @@ body {
   gap: 4px;
   max-height: calc(100vh - 220px);
   overflow-y: auto;
-  border: 2px solid rgba(var(--accent-rgb), 0.35);
-  border-radius: 8px;
+  border: 1px solid rgba(var(--accent-rgb), 0.3);
+  border-radius: var(--r-panel);
   padding: 8px;
-  background: rgba(var(--line-rgb), 0.04);
+  background: var(--surface);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
 }
 
 .wrow {
@@ -451,9 +486,10 @@ body {
   flex-direction: column;
   gap: 6px;
   padding: 8px 10px;
-  border-radius: 6px;
+  border-radius: var(--r-row);
   font-size: 15px;
   cursor: pointer;
+  transition: background var(--dur) var(--ease);
 }
 
 .wtop {
@@ -467,19 +503,19 @@ body {
   width: 100%;
   aspect-ratio: 16 / 9;
   object-fit: contain;
-  border-radius: 4px;
-  background: var(--panel);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
   display: block;
-  border: 1px solid rgba(var(--line-rgb), 0.12);
+  border: 1px solid rgba(var(--line-rgb), 0.1);
 }
 
 .wrow.active {
-  background: rgba(var(--accent-rgb), 0.14);
-  outline: 1px solid var(--accent);
+  background: rgba(var(--accent-rgb), 0.12);
+  box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), 0.45);
 }
 
 .wrow:hover {
-  background: rgba(var(--line-rgb), 0.08);
+  background: rgba(var(--line-rgb), 0.07);
 }
 
 .wpreview {
@@ -488,25 +524,27 @@ body {
   align-items: center;
   justify-content: center;
   min-height: 380px;
-  background: rgba(var(--bg-rgb), 0.25);
-  border-radius: 8px;
-  border: 2px solid rgba(var(--accent-rgb), 0.35);
+  background: var(--surface);
+  border-radius: var(--r-panel);
+  border: 1px solid rgba(var(--accent-rgb), 0.3);
   overflow: hidden;
   padding: 14px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
 }
 
 .wpreview img {
   width: 100%;
   height: 100%;
   object-fit: contain;
-  border-radius: 4px;
-  box-shadow: 0 10px 36px rgba(var(--bg-rgb), 0.55);
+  border-radius: var(--r-sm);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
 }
 
 /* ===== 设置页 ===== */
 #settings-view {
   max-width: 720px;
   margin: 0 auto;
+  animation: overlay-in var(--dur) var(--ease);
 }
 
 #settings-header {
@@ -520,6 +558,7 @@ body {
 #settings-title {
   font-size: 18px;
   font-weight: 600;
+  letter-spacing: 0.02em;
   flex: 1;
   text-align: center;
 }
@@ -539,10 +578,11 @@ body {
   background: none;
   border: 1px solid rgba(var(--line-rgb), 0.2);
   color: var(--dim);
-  border-radius: 5px;
+  border-radius: var(--r-control);
   padding: 3px 12px;
   font-size: 13px;
   cursor: pointer;
+  transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease);
 }
 
 #settings-back:hover {
@@ -562,6 +602,7 @@ body {
 
 .setting-group-title {
   font-size: 13px;
+  font-weight: 600;
   color: var(--accent);
   text-transform: uppercase;
   letter-spacing: 0.5px;
@@ -589,10 +630,11 @@ body {
   border: none;
   color: var(--on-accent);
   font-weight: 700;
-  border-radius: 5px;
+  border-radius: var(--r-control);
   padding: 7px 22px;
   font-size: 14px;
   cursor: pointer;
+  transition: background var(--dur) var(--ease);
 }
 
 .primary-btn:disabled {
@@ -602,7 +644,7 @@ body {
 }
 
 .primary-btn:not(:disabled):hover {
-  filter: brightness(1.1);
+  background: var(--accent-strong);
 }
 
 .settings-status {
@@ -615,10 +657,11 @@ body {
   background: none;
   border: 1px solid rgba(var(--line-rgb), 0.2);
   color: var(--dim);
-  border-radius: 5px;
+  border-radius: var(--r-control);
   padding: 5px 16px;
   font-size: 13px;
   cursor: pointer;
+  transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease);
 }
 
 .setting-row-btn:hover {
@@ -629,7 +672,8 @@ body {
 .version-info {
   font-size: 14px;
   color: var(--dim);
-  font-family: Consolas, monospace;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
 }
 
 .changelog-entry {
@@ -638,8 +682,9 @@ body {
 
 .changelog-ver {
   font-size: 15px;
-  font-weight: 700;
+  font-weight: 600;
   color: var(--fg);
+  font-family: var(--font-mono);
 }
 
 .changelog-date {
@@ -661,7 +706,7 @@ body {
 #confirm-mask {
   position: fixed;
   inset: 0;
-  background: rgba(var(--bg-rgb), 0.55);
+  background: rgba(var(--bg-rgb), 0.6);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -673,12 +718,13 @@ body {
 }
 
 #confirm-dialog {
-  background: var(--panel);
-  border: 1px solid var(--accent);
-  border-radius: 10px;
+  background: var(--surface);
+  border: 1px solid rgba(var(--accent-rgb), 0.5);
+  border-radius: var(--r-panel);
   padding: 22px 26px;
   min-width: 340px;
-  box-shadow: 0 12px 40px rgba(var(--bg-rgb), 0.7);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55);
+  animation: pop-in var(--dur) var(--ease);
 }
 
 .confirm-text {
@@ -697,12 +743,35 @@ body {
   background: none;
   border: 1px solid rgba(var(--line-rgb), 0.25);
   color: var(--fg);
-  border-radius: 5px;
+  border-radius: var(--r-control);
   padding: 5px 16px;
   font-size: 13px;
   cursor: pointer;
+  transition: border-color var(--dur) var(--ease);
 }
 
 .confirm-buttons button:hover {
   border-color: var(--fg);
+}
+
+/* ===== 动效（仅 transform/opacity，短时长；reduced-motion 全关） ===== */
+@keyframes overlay-in {
+  from { opacity: 0; transform: translateY(4px) scale(0.998); }
+}
+
+@keyframes pop-in {
+  from { opacity: 0; transform: scale(0.97); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  .caret {
+    animation: none;
+  }
 }
