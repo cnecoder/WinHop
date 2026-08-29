@@ -1,6 +1,6 @@
 <div align="center">
 
-![WinHop](src-tauri/icons/128x128.png)
+<img src="src-tauri/icons/icon.png" alt="WinHop" width="128">
 
 # WinHop
 
