@@ -108,6 +108,7 @@ struct Render {
     title: String,
     window_order: String,
     multi_letter: bool,
+    theme: String,
     filter: String,
     programs: Vec<ProgramUi>,
     windows: Vec<WindowUi>,
@@ -185,6 +186,7 @@ fn emit(app: &AppHandle, inner: &Inner, ov: &OverlayState) {
         title: String::new(),
         window_order: cfg.window_order.clone(),
         multi_letter: multi,
+        theme: cfg.theme.clone(),
         filter: if multi { ov.letter_buf.clone() } else { String::new() },
         programs: Vec::new(),
         windows: Vec::new(),
@@ -413,6 +415,7 @@ fn close(app: &AppHandle) {
         title: String::new(),
         window_order: cfg.window_order.clone(),
         multi_letter: cfg.multi_letter,
+        theme: cfg.theme.clone(),
         filter: String::new(),
         programs: Vec::new(),
         windows: Vec::new(),
@@ -731,6 +734,7 @@ const CURRENT_CHANGELOG: ChangelogEntry = ChangelogEntry {
         "程序层每页 20 个，PageUp/PageDown 翻页",
         "统一编辑：所有软件均可改名与配置快捷键，字母框样式区分已配置/动态/未运行",
         "配置与日志迁至 %APPDATA%\\WinHop，升级重装不丢失",
+        "皮肤系统：设置页可切换主题（黑绿 / 黑黄）",
         "修复切换窗口后光标卡顿、热键无法唤起的问题",
     ],
 };
@@ -741,7 +745,15 @@ struct SettingsInfo {
     hotkey: String,
     window_order: String,
     multi_letter: bool,
+    theme: String,
+    themes: Vec<ThemeUi>,
     changelog: ChangelogUi,
+}
+
+#[derive(Serialize, Clone)]
+struct ThemeUi {
+    id: String,
+    name: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -749,6 +761,16 @@ struct ChangelogUi {
     version: String,
     date: String,
     notes: Vec<String>,
+}
+
+// 主题 id → 显示名（与前端 styles.css 的 [data-theme=...] 对应）
+fn theme_name(id: &str) -> &'static str {
+    // 调用方只遍历 config::THEMES，未知 id 不会出现；兜底给静态串
+    match id {
+        "black-green" => "黑绿",
+        "black-yellow" => "黑黄",
+        _ => "未知主题",
+    }
 }
 
 // 读取当前设置与版本/更新记录（设置页打开时调用，不立即写盘）
@@ -761,6 +783,14 @@ fn get_settings(app: AppHandle) -> SettingsInfo {
         hotkey: cfg.hotkey.clone(),
         window_order: cfg.window_order.clone(),
         multi_letter: cfg.multi_letter,
+        theme: cfg.theme.clone(),
+        themes: config::THEMES
+            .iter()
+            .map(|id| ThemeUi {
+                id: (*id).into(),
+                name: theme_name(id).into(),
+            })
+            .collect(),
         changelog: ChangelogUi {
             version: CURRENT_CHANGELOG.version.into(),
             date: CURRENT_CHANGELOG.date.into(),
@@ -773,6 +803,7 @@ fn get_settings(app: AppHandle) -> SettingsInfo {
 struct SettingsInput {
     window_order: String,
     multi_letter: bool,
+    theme: String,
 }
 
 // 批量保存设置（设置页点保存时调用）
@@ -781,21 +812,27 @@ fn save_settings(app: AppHandle, input: SettingsInput) -> Result<(), String> {
     if input.window_order != "zorder" && input.window_order != "mru" {
         return Err(format!("无效的排序方式「{}」", input.window_order));
     }
+    if !config::THEMES.contains(&input.theme.as_str()) {
+        return Err(format!("无效的主题「{}」", input.theme));
+    }
     let inner = app.state::<Inner>();
     let changed = {
         let mut cfg = inner.cfg.lock().unwrap();
         let changed = cfg.window_order != input.window_order
-            || cfg.multi_letter != input.multi_letter;
+            || cfg.multi_letter != input.multi_letter
+            || cfg.theme != input.theme;
         cfg.window_order = input.window_order.clone();
         cfg.multi_letter = input.multi_letter;
+        cfg.theme = input.theme.clone();
         config::save(&cfg, &inner.cfg_path).map_err(|e| format!("保存配置失败: {}", e))?;
         changed
     };
     eprintln!(
-        "[t={}] 保存设置 order={} multi_letter={}",
+        "[t={}] 保存设置 order={} multi_letter={} theme={}",
         windows::now_ms(),
         input.window_order,
-        input.multi_letter
+        input.multi_letter,
+        input.theme
     );
     if changed && inner.visible.load(Ordering::Relaxed) {
         let mut ov = inner.overlay.lock().unwrap();

@@ -26,7 +26,8 @@ Rust + Tauri 2（WebView2）· Windows 10/11 x64
 - **排序模式可选**：固定序号（创建顺序）/ 最近使用优先
 - **双屏支持**：条目显示窗口所在屏幕标签；切换后窗口留在原屏幕
 - **管理员程序支持**：提权运行，可切换 taskmgr 等 UIPI 保护的窗口
-- **设置页**：`F2` 或点头部设置按钮进入独立页面，改动保存后生效；显示当前版本与该版本更新记录
+- **皮肤系统**：所有配色走 CSS 变量主题，设置页切换；当前内置黑绿主题，新增主题只需加一个变量块并登记
+- **设置页**：`F2` 或点头部设置按钮进入独立页面，改动保存后生效（主题点选即预览，放弃则回退）；显示当前版本与该版本更新记录
 - **托盘常驻**：左键唤出、右键菜单退出、单实例保护
 - **配置持久化**：config.json 存 `%APPDATA%\WinHop`，升级/重装不丢失；旧版（WinTab 及 exe 旁配置）首次运行自动迁移
 
@@ -73,6 +74,7 @@ Ctrl+Space（默认热键，可配置）
 
 - **窗口排序方式**：固定序号（按创建顺序）/ 最近使用优先
 - **多字母模式**开关
+- **主题**切换（皮肤）
 - **退出 WinHop**
 - 当前版本号与该版本更新记录
 
@@ -93,6 +95,7 @@ Ctrl+Space（默认热键，可配置）
   "elevate": true,
   "window_order": "zorder",
   "multi_letter": false,
+  "theme": "black-green",
   "programs": [
     { "key": "c", "multi_key": "ch", "name": "Chrome", "process": "chrome.exe" },
     { "key": "v", "multi_key": "vs", "name": "VS Code", "process": "code.exe" }
@@ -106,6 +109,7 @@ Ctrl+Space（默认热键，可配置）
 | `elevate` | release 构建是否提权运行（切换管理员程序必需，debug 构建忽略） |
 | `window_order` | 窗口层排序：`zorder` 固定序号（创建顺序）/ `mru` 最近使用优先。设置页可改 |
 | `multi_letter` | 是否启用多字母模式（设置页可改） |
+| `theme` | 主题 id（皮肤，设置页可改）；内置 `black-green`（黑绿）、`black-yellow`（黑黄，亮姜黄 accent），缺省 `black-green` |
 | `programs[]` | 程序条目：`key` 单字母代号（单个小写字母，可空）、`multi_key` 多字母代号（全小写字母，可空）、`name` 显示名、`process` exe 文件名（小写） |
 
 `key` 与 `multi_key` 各自唯一、均可为空（只用另一种模式时）。默认配置预置了常用软件的两套代号。

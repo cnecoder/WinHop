@@ -1,6 +1,6 @@
 # ADR-004: 配置文件
 
-- 状态: 已接受 (2026-08-02)，2026-08-08 修订（配置位置迁移至用户目录），2026-08-29 修订（产品改名 WinTab → WinHop；新增 multi_letter/multi_key）
+- 状态: 已接受 (2026-08-02)，2026-08-08 修订（配置位置迁移至用户目录），2026-08-29 修订（产品改名 WinTab → WinHop；新增 multi_letter/multi_key；新增 theme 皮肤字段）
 - 关联: [[glossary]]
 
 ## 背景
@@ -24,6 +24,7 @@
   "elevate": true,
   "window_order": "zorder",
   "multi_letter": false,
+  "theme": "black-green",
   "programs": [
     { "key": "c", "multi_key": "ch", "name": "Chrome", "process": "chrome.exe" },
     { "key": "v", "multi_key": "vs", "name": "VS Code", "process": "Code.exe" }
@@ -36,6 +37,7 @@
 - `elevate`: release 构建是否提权运行（切换管理员程序必需，debug 构建忽略）
 - `window_order`: 窗口层排序 `zorder`/`mru`（见 ADR-003）
 - `multi_letter`: 是否启用多字母模式（连续字母筛选 + Enter 确认，突破 26 字母上限）；设置页可改
+- `theme`: 皮肤主题 id，缺省 `black-green`（黑绿）；内置 `black-yellow`（黑黄，亮姜黄 accent）。前端所有配色走 CSS 变量，`<html data-theme>` 切换；新增主题 = styles.css 加一个 `[data-theme="xxx"]` 变量块 + Rust `config::THEMES`/`theme_name` 登记。非法值回退默认
 - `programs[]`: 程序条目数组
   - `key`: 单字母代号（单个小写字母，可空）；启动时校验重复与非法字符，冲突则报错退出
   - `multi_key`: 多字母代号（全小写字母串，可空），多字母模式下优先于名称匹配；与 `key` 各自唯一
@@ -46,7 +48,7 @@
 
 **运行中修改**：设置界面与「+ 号添加程序」会改写配置并立即落盘（`config.json` 保存路径 = 加载路径）。
 
-**校验规则**：`key` 不重复、唯一小写字母（可空）；`multi_key` 不重复、全小写字母（可空）；`window_order` 非法值回退 `zorder`。加载失败时输出路径与错误，不静默忽略。
+**校验规则**：`key` 不重复、唯一小写字母（可空）；`multi_key` 不重复、全小写字母（可空）；`window_order` 非法值回退 `zorder`；`theme` 不在 `config::THEMES` 内回退默认主题。加载失败时输出路径与错误，不静默忽略。
 
 **未实现（见 TODO）**：`winhop capture` 辅助捕获命令、`autostart` 开机自启。
 

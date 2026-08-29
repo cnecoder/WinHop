@@ -9,6 +9,8 @@ pub struct Config {
     pub window_order: String,
     #[serde(default)]
     pub multi_letter: bool,
+    #[serde(default = "default_theme")]
+    pub theme: String,
     pub programs: Vec<Program>,
 }
 
@@ -18,6 +20,10 @@ fn default_true() -> bool {
 
 fn default_window_order() -> String {
     "zorder".into()
+}
+
+fn default_theme() -> String {
+    "black-green".into()
 }
 
 #[derive(Deserialize, Serialize, Clone)]
@@ -134,6 +140,7 @@ pub fn load() -> (Config, std::path::PathBuf) {
         elevate: true,
         window_order: "zorder".into(),
         multi_letter: false,
+        theme: default_theme(),
         programs: default_programs(),
     };
     let json = serde_json::to_string_pretty(&default).expect("序列化默认配置失败");
@@ -189,6 +196,9 @@ fn default_programs() -> Vec<Program> {
     ]
 }
 
+/// 已知主题 id（与前端 styles.css 的 [data-theme=...] 对应）
+pub const THEMES: &[&str] = &["black-green", "black-yellow"];
+
 fn validate(cfg: &mut Config) {
     if cfg.window_order != "zorder" && cfg.window_order != "mru" {
         eprintln!(
@@ -196,6 +206,14 @@ fn validate(cfg: &mut Config) {
             cfg.window_order
         );
         cfg.window_order = "zorder".into();
+    }
+    if !THEMES.contains(&cfg.theme.as_str()) {
+        eprintln!(
+            "[winhop] 配置 theme 无效「{}」，回退为 {}",
+            cfg.theme,
+            THEMES[0]
+        );
+        cfg.theme = THEMES[0].into();
     }
     let mut seen_key = std::collections::HashSet::new();
     let mut seen_mk = std::collections::HashSet::new();

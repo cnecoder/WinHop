@@ -20,12 +20,19 @@ function escapeHtml(s) {
   );
 }
 
+// 应用主题：写到 <html data-theme>，CSS 变量块据此切换
+function applyTheme(id) {
+  document.documentElement.dataset.theme = id || "black-green";
+}
+
 // 读取设置页表单当前值
 function readSettingsForm() {
   const order = document.querySelector('input[name="order"]:checked');
+  const theme = document.querySelector('input[name="theme"]:checked');
   return {
     window_order: order ? order.value : "zorder",
     multi_letter: document.getElementById("multi-letter").checked,
+    theme: theme ? theme.value : "black-green",
   };
 }
 
@@ -35,7 +42,8 @@ function settingsDirty() {
   const cur = readSettingsForm();
   return (
     cur.window_order !== settingsLoaded.window_order ||
-    cur.multi_letter !== settingsLoaded.multi_letter
+    cur.multi_letter !== settingsLoaded.multi_letter ||
+    cur.theme !== settingsLoaded.theme
   );
 }
 
@@ -55,11 +63,32 @@ async function openSettings() {
   settingsLoaded = {
     window_order: info.window_order,
     multi_letter: info.multi_letter,
+    theme: info.theme,
   };
   document.querySelectorAll('input[name="order"]').forEach((r) => {
     r.checked = r.value === info.window_order;
   });
   document.getElementById("multi-letter").checked = !!info.multi_letter;
+  // 主题单选项由后端主题表动态生成
+  const themeBox = document.getElementById("theme-options");
+  themeBox.innerHTML = (info.themes || [])
+    .map(
+      (t) =>
+        `<label class="setting-row"><input type="radio" name="theme" value="${escapeHtml(
+          t.id
+        )}"${t.id === info.theme ? " checked" : ""} /><span>${escapeHtml(
+          t.name
+        )}</span></label>`
+    )
+    .join("");
+  themeBox.querySelectorAll('input[name="theme"]').forEach((r) => {
+    // 点选即预览（未保存返回/Esc 会回退）
+    r.addEventListener("change", () => {
+      applyTheme(r.value);
+      updateSettingsState();
+    });
+  });
+  applyTheme(info.theme);
   document.getElementById("version-info").textContent = "版本 " + info.version;
   const e = info.changelog;
   document.getElementById("changelog").innerHTML =
@@ -184,6 +213,8 @@ document.getElementById("confirm-save").addEventListener("click", async () => {
 });
 document.getElementById("confirm-discard").addEventListener("click", () => {
   confirmMask.hidden = true;
+  // 丢弃未保存的主题预览，回退到已保存主题
+  if (settingsLoaded) applyTheme(settingsLoaded.theme);
   closeSettings();
 });
 document.getElementById("confirm-cancel").addEventListener("click", () => {
@@ -412,6 +443,8 @@ document.getElementById("quit-btn").addEventListener("click", () => {
 
 function render(s) {
   state = s;
+  // 主题以后端配置为准（保存后/启动时同步）
+  if (s.theme) applyTheme(s.theme);
   if (!s.visible) {
     appEl.style.display = "none";
     settingsOpen = false;
