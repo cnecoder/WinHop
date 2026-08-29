@@ -4,10 +4,13 @@ const { invoke } = window.__TAURI__.core;
 const appEl = document.getElementById("app");
 const titleEl = document.getElementById("title");
 const listEl = document.getElementById("list");
-const settingsEl = document.getElementById("settings");
+const overlayView = document.getElementById("overlay-view");
+const settingsView = document.getElementById("settings-view");
+const confirmMask = document.getElementById("confirm-mask");
 
 let settingsOpen = false;
 let state = null;
+let settingsLoaded = null; // 已保存的设置快照，用于判断是否改动
 
 function escapeHtml(s) {
   return s.replace(
@@ -17,13 +20,80 @@ function escapeHtml(s) {
   );
 }
 
-function renderSettings(state) {
-  const order = state.window_order;
+// 读取设置页表单当前值
+function readSettingsForm() {
+  const order = document.querySelector('input[name="order"]:checked');
+  return {
+    window_order: order ? order.value : "zorder",
+    multi_letter: document.getElementById("multi-letter").checked,
+  };
+}
+
+// 设置是否有未保存改动
+function settingsDirty() {
+  if (!settingsLoaded) return false;
+  const cur = readSettingsForm();
+  return (
+    cur.window_order !== settingsLoaded.window_order ||
+    cur.multi_letter !== settingsLoaded.multi_letter
+  );
+}
+
+// 更新保存按钮可用状态与状态文案
+function updateSettingsState() {
+  const dirty = settingsDirty();
+  const saveBtn = document.getElementById("settings-save");
+  saveBtn.disabled = !dirty;
+  document.getElementById("settings-status").textContent = dirty
+    ? "有未保存的修改"
+    : "";
+}
+
+// 打开设置页：拉取设置、填表单、显示版本与更新记录
+async function openSettings() {
+  const info = await invoke("get_settings");
+  settingsLoaded = {
+    window_order: info.window_order,
+    multi_letter: info.multi_letter,
+  };
   document.querySelectorAll('input[name="order"]').forEach((r) => {
-    r.checked = r.value === order;
+    r.checked = r.value === info.window_order;
   });
-  const ml = document.getElementById("multi-letter");
-  if (ml) ml.checked = !!state.multi_letter;
+  document.getElementById("multi-letter").checked = !!info.multi_letter;
+  document.getElementById("version-info").textContent = "版本 " + info.version;
+  const e = info.changelog;
+  document.getElementById("changelog").innerHTML =
+    `<div class="changelog-entry">
+      <div class="changelog-ver">${escapeHtml(e.version)} <span class="changelog-date">${escapeHtml(e.date)}</span></div>
+      <ul>${e.notes.map((n) => `<li>${escapeHtml(n)}</li>`).join("")}</ul>
+    </div>`;
+  updateSettingsState();
+  settingsOpen = true;
+  overlayView.hidden = true;
+  settingsView.hidden = false;
+}
+
+function closeSettings() {
+  settingsOpen = false;
+  settingsView.hidden = true;
+  overlayView.hidden = false;
+}
+
+// 返回/ESC 时若有未保存改动则弹确认
+function requestCloseSettings() {
+  if (settingsDirty()) {
+    confirmMask.hidden = false;
+  } else {
+    closeSettings();
+  }
+}
+
+async function saveSettingsAndClose() {
+  const input = readSettingsForm();
+  await invoke("save_settings", { input });
+  settingsLoaded = input;
+  updateSettingsState();
+  closeSettings();
 }
 
 function renderHeader(s) {
@@ -56,23 +126,25 @@ function renderHeader(s) {
 // 覆盖层夺焦后按键落在本 webview 内部（raw input 内部可达），路由给 Rust 状态机。
 // LL 键盘钩子对 Chromium 前台无效（raw input 绕过钩子链），这是唯一的按键路径。
 window.addEventListener("keydown", (e) => {
-  // 输入框（+ 号配置字母）按键不参与快捷键路由
+  // 设置页按键独立处理
+  if (settingsOpen) {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      if (confirmMask.hidden) requestCloseSettings();
+      return;
+    }
+    // 表单内的按键（radio/checkbox）正常处理，不路由
+    return;
+  }
+  // 覆盖层中编辑程序的输入框：按键不参与快捷键路由
   if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
   e.preventDefault();
   if (e.key === "F2") {
-    settingsOpen = !settingsOpen;
-    settingsEl.hidden = !settingsOpen;
+    openSettings();
     return;
   }
   if (e.key === "F11") {
     invoke("toggle_fullscreen");
-    return;
-  }
-  if (settingsOpen) {
-    if (e.key === "Escape") {
-      settingsOpen = false;
-      settingsEl.hidden = true;
-    }
     return;
   }
   let k = null;
@@ -82,6 +154,7 @@ window.addEventListener("keydown", (e) => {
   else if (e.key === "PageUp") k = "pageup";
   else if (e.key === "PageDown") k = "pagedown";
   else if (e.key === "Backspace") k = "back";
+  else if (e.key === " " || e.code === "Space") k = "space";
   else if (e.key === "Enter") k = "enter";
   else if (e.ctrlKey && e.code === "Space") k = "hotkey";
   else if (/^[a-zA-Z]$/.test(e.key)) k = "letter:" + e.key.toLowerCase();
@@ -90,8 +163,31 @@ window.addEventListener("keydown", (e) => {
 });
 
 document.getElementById("settings-btn").addEventListener("click", () => {
-  settingsOpen = !settingsOpen;
-  settingsEl.hidden = !settingsOpen;
+  openSettings();
+});
+
+document.getElementById("settings-back").addEventListener("click", () => {
+  requestCloseSettings();
+});
+
+document.querySelectorAll('input[name="order"], #multi-letter').forEach((el) => {
+  el.addEventListener("change", updateSettingsState);
+});
+
+document.getElementById("settings-save").addEventListener("click", () => {
+  saveSettingsAndClose();
+});
+
+document.getElementById("confirm-save").addEventListener("click", async () => {
+  confirmMask.hidden = true;
+  await saveSettingsAndClose();
+});
+document.getElementById("confirm-discard").addEventListener("click", () => {
+  confirmMask.hidden = true;
+  closeSettings();
+});
+document.getElementById("confirm-cancel").addEventListener("click", () => {
+  confirmMask.hidden = true;
 });
 
 // 鼠标点击选择：复用键盘路径——程序层按字母、窗口层按编号
@@ -115,7 +211,9 @@ listEl.addEventListener("click", (e) => {
 // 统一编辑面板：行下方弹字母 + 名称框，Enter 保存（已配置改键/名，未配置入配置）
 function startEditProgram(btn) {
   const row = btn.closest(".row");
-  const prog = state.programs.find((p) => p.key === row.dataset.key) || {};
+  // 多字母模式下未配置程序的 key 均为空串，按 key 查找会命中排名最前的空 key 程序；
+  // process 在列表中唯一，统一按它定位
+  const prog = state.programs.find((p) => p.process === row.dataset.process) || {};
   if (!prog.process) return;
 
   const panel = document.createElement("div");
@@ -308,22 +406,6 @@ listEl.addEventListener("mouseleave", () => {
   }
 });
 
-document.querySelectorAll('input[name="order"]').forEach((r) => {
-  r.addEventListener("change", () => {
-    if (r.checked) {
-      invoke("set_window_order", { order: r.value }).catch((e) =>
-        console.error("设置保存失败:", e)
-      );
-    }
-  });
-});
-
-document.getElementById("multi-letter").addEventListener("change", (e) => {
-  invoke("set_multi_letter", { on: e.target.checked }).catch((e) =>
-    console.error("设置保存失败:", e)
-  );
-});
-
 document.getElementById("quit-btn").addEventListener("click", () => {
   invoke("quit_app");
 });
@@ -333,11 +415,14 @@ function render(s) {
   if (!s.visible) {
     appEl.style.display = "none";
     settingsOpen = false;
-    settingsEl.hidden = true;
+    settingsView.hidden = true;
+    overlayView.hidden = false;
+    confirmMask.hidden = true;
     return;
   }
   appEl.style.display = "block";
-  renderSettings(s);
+  // 设置页打开时不刷新覆盖层（它被隐藏）；关闭设置后由新事件覆盖
+  if (settingsOpen) return;
   renderHeader(s);
   if (s.phase === "windows") {
     titleEl.textContent = s.title;

@@ -543,6 +543,7 @@ fn key(app: AppHandle, k: String) {
         "pageup" => HookMsg::PageUp,
         "pagedown" => HookMsg::PageDown,
         "back" => HookMsg::Backspace,
+        "space" => HookMsg::Space,
         "enter" => HookMsg::Enter,
         "hotkey" => HookMsg::Hotkey,
         s if s.starts_with("letter:") => {
@@ -712,43 +713,97 @@ fn pick_program(app: AppHandle, process: String) {
     }
 }
 
-// 设置界面：开关多字母模式，立即落盘
+// 当前版本与更新记录（显示在设置页）
+const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+struct ChangelogEntry {
+    version: &'static str,
+    date: &'static str,
+    notes: &'static [&'static str],
+}
+
+// 当前版本的更新记录（设置页只显示当前版本）
+const CURRENT_CHANGELOG: ChangelogEntry = ChangelogEntry {
+    version: "0.2.0",
+    date: "2026-08",
+    notes: &[
+        "多字母模式：连续输入字母按代号/名称筛选，回车确认，可配置多字母快捷键",
+        "程序层每页 20 个，PageUp/PageDown 翻页",
+        "统一编辑：所有软件均可改名与配置快捷键，字母框样式区分已配置/动态/未运行",
+        "配置与日志迁至 %APPDATA%\\WinTab，升级重装不丢失",
+        "修复切换窗口后光标卡顿、热键无法唤起的问题",
+    ],
+};
+
+#[derive(Serialize, Clone)]
+struct SettingsInfo {
+    version: String,
+    hotkey: String,
+    window_order: String,
+    multi_letter: bool,
+    changelog: ChangelogUi,
+}
+
+#[derive(Serialize, Clone)]
+struct ChangelogUi {
+    version: String,
+    date: String,
+    notes: Vec<String>,
+}
+
+// 读取当前设置与版本/更新记录（设置页打开时调用，不立即写盘）
 #[tauri::command]
-fn set_multi_letter(app: AppHandle, on: bool) -> Result<(), String> {
+fn get_settings(app: AppHandle) -> SettingsInfo {
     let inner = app.state::<Inner>();
-    {
-        let mut cfg = inner.cfg.lock().unwrap();
-        cfg.multi_letter = on;
-        config::save(&cfg, &inner.cfg_path).map_err(|e| format!("保存配置失败: {}", e))?;
+    let cfg = inner.cfg.lock().unwrap();
+    SettingsInfo {
+        version: APP_VERSION.into(),
+        hotkey: cfg.hotkey.clone(),
+        window_order: cfg.window_order.clone(),
+        multi_letter: cfg.multi_letter,
+        changelog: ChangelogUi {
+            version: CURRENT_CHANGELOG.version.into(),
+            date: CURRENT_CHANGELOG.date.into(),
+            notes: CURRENT_CHANGELOG.notes.iter().map(|s| s.to_string()).collect(),
+        },
     }
-    eprintln!("[t={}] 多字母模式 = {}", windows::now_ms(), on);
-    if inner.visible.load(Ordering::Relaxed) {
+}
+
+#[derive(serde::Deserialize)]
+struct SettingsInput {
+    window_order: String,
+    multi_letter: bool,
+}
+
+// 批量保存设置（设置页点保存时调用）
+#[tauri::command]
+fn save_settings(app: AppHandle, input: SettingsInput) -> Result<(), String> {
+    if input.window_order != "zorder" && input.window_order != "mru" {
+        return Err(format!("无效的排序方式「{}」", input.window_order));
+    }
+    let inner = app.state::<Inner>();
+    let changed = {
+        let mut cfg = inner.cfg.lock().unwrap();
+        let changed = cfg.window_order != input.window_order
+            || cfg.multi_letter != input.multi_letter;
+        cfg.window_order = input.window_order.clone();
+        cfg.multi_letter = input.multi_letter;
+        config::save(&cfg, &inner.cfg_path).map_err(|e| format!("保存配置失败: {}", e))?;
+        changed
+    };
+    eprintln!(
+        "[t={}] 保存设置 order={} multi_letter={}",
+        windows::now_ms(),
+        input.window_order,
+        input.multi_letter
+    );
+    if changed && inner.visible.load(Ordering::Relaxed) {
         let mut ov = inner.overlay.lock().unwrap();
         let cfg = inner.cfg.lock().unwrap().clone();
         ov.prog_list = build_prog_list(&cfg, &ov.wins_by_proc, cfg.multi_letter);
         ov.prog_sel = 0;
         ov.prog_page = 0;
         ov.letter_buf.clear();
-        emit(&app, &inner, &ov);
-    }
-    Ok(())
-}
-
-// 设置界面：修改窗口排序方式，立即落盘
-#[tauri::command]
-fn set_window_order(app: AppHandle, order: String) -> Result<(), String> {
-    if order != "zorder" && order != "mru" {
-        return Err(format!("无效的排序方式「{}」", order));
-    }
-    let inner = app.state::<Inner>();
-    {
-        let mut cfg = inner.cfg.lock().unwrap();
-        cfg.window_order = order.clone();
-        config::save(&cfg, &inner.cfg_path).map_err(|e| format!("保存配置失败: {}", e))?;
-    }
-    eprintln!("[t={}] 窗口排序方式改为 {}", windows::now_ms(), order);
-    if inner.visible.load(Ordering::Relaxed) {
-        let ov = inner.overlay.lock().unwrap();
         emit(&app, &inner, &ov);
     }
     Ok(())
@@ -899,6 +954,42 @@ fn handle_key(app: &AppHandle, msg: HookMsg) {
             }
             emit(app, &inner, &ov);
         }
+        HookMsg::Space => {
+            // 快速跳转：呼出后按空格，切到上一个最近使用窗口（两窗口互切，类似 Alt-Tab 瞬切）。
+            // 取 MRU 中可见、非覆盖层的两个最新窗口，切到第二个。
+            if ov.phase != Phase::Programs {
+                return;
+            }
+            let overlay_hwnd = windows::get_overlay_hwnd();
+            let mut recent: Vec<(u64, isize)> = {
+                let mru = inner.mru.lock().unwrap();
+                mru.iter()
+                    .filter(|(&h, _)| h != 0 && h != overlay_hwnd)
+                    .map(|(&h, &ts)| (ts, h))
+                    .collect()
+            };
+            recent.sort_by(|a, b| b.0.cmp(&a.0)); // 时间戳降序
+            // 跳过第一个（当前/最新），取第二个可见的
+            let target = recent
+                .iter()
+                .filter(|(_, h)| windows::overlay_visible(*h))
+                .nth(1)
+                .map(|&(_, h)| h);
+            if let Some(hwnd) = target {
+                ov.switched = true;
+                ov.last_activated = hwnd;
+                inner
+                    .mru
+                    .lock()
+                    .unwrap()
+                    .insert(hwnd, windows::now_ms());
+                inner.pending_activate.store(hwnd, Ordering::Relaxed);
+                drop(ov);
+                close(app);
+            } else {
+                eprintln!("[wintab] 空格快速跳转：无可切换的上一个窗口");
+            }
+        }
         HookMsg::Enter => {
             let done = match ov.phase {
                 Phase::Programs => {
@@ -970,8 +1061,8 @@ pub fn run() {
         )
         .invoke_handler(tauri::generate_handler![
             key,
-            set_window_order,
-            set_multi_letter,
+            get_settings,
+            save_settings,
             quit_app,
             window_thumbnail,
             toggle_fullscreen,

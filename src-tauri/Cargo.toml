@@ -1,6 +1,6 @@
 [package]
 name = "wintab"
-version = "0.1.1"
+version = "0.2.0"
 description = "程序快速切换器"
 authors = ["luo"]
 edition = "2021"
