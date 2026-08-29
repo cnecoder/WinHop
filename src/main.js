@@ -460,7 +460,7 @@ function render(s) {
   } else {
     lastWinKey = null;
     listEl.className = "";
-    titleEl.textContent = "WinTab";
+    titleEl.textContent = "WinHop";
     // 工具条：左侧筛选（多字母模式），右侧分页/翻页提示，同一行两端对齐
     const filterLeft = s.multi_letter
       ? `<div class="filter-bar">

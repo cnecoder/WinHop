@@ -375,7 +375,7 @@ fn open(app: &AppHandle) {
 fn close(app: &AppHandle) {
     let inner = app.state::<Inner>();
     if !inner.visible.load(Ordering::Relaxed) {
-        eprintln!("[wintab] close 被跳过（已关闭）");
+        eprintln!("[winhop] close 被跳过（已关闭）");
         return;
     }
     let ov = inner.overlay.lock().unwrap();
@@ -452,7 +452,7 @@ fn select_entry(app: &AppHandle, inner: &Inner, ov: &mut OverlayState, entry: &P
     let wins = match ov.wins_by_proc.get(&entry.process) {
         Some(w) if !w.is_empty() => w,
         _ => {
-            eprintln!("[wintab] '{}' 无窗口", entry.name);
+            eprintln!("[winhop] '{}' 无窗口", entry.name);
             return false;
         }
     };
@@ -462,7 +462,7 @@ fn select_entry(app: &AppHandle, inner: &Inner, ov: &mut OverlayState, entry: &P
         ov.last_activated = wins[ov.active].hwnd;
         inner.mru.lock().unwrap().insert(wins[ov.active].hwnd, now);
         deferred_activate(app, wins[ov.active].hwnd);
-        eprintln!("[wintab] 轮询 {} 窗口 {}", entry.name, ov.active + 1);
+        eprintln!("[winhop] 轮询 {} 窗口 {}", entry.name, ov.active + 1);
         emit(app, inner, ov);
         return false;
     }
@@ -488,7 +488,7 @@ fn select_entry(app: &AppHandle, inner: &Inner, ov: &mut OverlayState, entry: &P
         ov.wins = wins;
         ov.active = 0;
         ov.digit_buf.clear();
-        eprintln!("[wintab] '{}' -> {} 窗口数 {}", entry.key, entry.name, ov.wins.len());
+        eprintln!("[winhop] '{}' -> {} 窗口数 {}", entry.key, entry.name, ov.wins.len());
         emit(app, inner, ov);
         false
     }
@@ -510,7 +510,7 @@ fn select_by_letter(app: &AppHandle, inner: &Inner, ov: &mut OverlayState, c: ch
         .find(|(_, e)| e.key == c.to_string())
         .map(|(i, e)| (i, e.clone()))
     else {
-        eprintln!("[wintab] letter '{}' 无对应程序", c);
+        eprintln!("[winhop] letter '{}' 无对应程序", c);
         return false;
     };
     ov.prog_sel = idx;
@@ -529,7 +529,7 @@ fn resolve_window(inner: &Inner, ov: &mut OverlayState, n: usize) -> bool {
     ov.last_activated = ov.wins[idx].hwnd;
     inner.mru.lock().unwrap().insert(ov.wins[idx].hwnd, windows::now_ms());
     inner.pending_activate.store(ov.wins[idx].hwnd, Ordering::Relaxed);
-    eprintln!("[wintab] 切换到窗口 {}", idx + 1);
+    eprintln!("[winhop] 切换到窗口 {}", idx + 1);
     true
 }
 
@@ -565,8 +565,8 @@ async fn window_thumbnail(hwnd: isize, max_w: u32, max_h: u32) -> Result<String,
         hwnd,
         bmp.len()
     );
-    // 诊断转储：设置 WINTAB_DUMP_THUMB=1 时把 BMP 落盘
-    if std::env::var("WINTAB_DUMP_THUMB").is_ok() {
+    // 诊断转储：设置 WINHOP_DUMP_THUMB=1 时把 BMP 落盘
+    if std::env::var("WINHOP_DUMP_THUMB").is_ok() {
         let path = std::env::temp_dir().join(format!("wt_thumb_{:#x}.bmp", hwnd));
         let _ = std::fs::write(&path, &bmp);
         eprintln!("[t={}] 转储 {}", windows::now_ms(), path.display());
@@ -730,7 +730,7 @@ const CURRENT_CHANGELOG: ChangelogEntry = ChangelogEntry {
         "多字母模式：连续输入字母按代号/名称筛选，回车确认，可配置多字母快捷键",
         "程序层每页 20 个，PageUp/PageDown 翻页",
         "统一编辑：所有软件均可改名与配置快捷键，字母框样式区分已配置/动态/未运行",
-        "配置与日志迁至 %APPDATA%\\WinTab，升级重装不丢失",
+        "配置与日志迁至 %APPDATA%\\WinHop，升级重装不丢失",
         "修复切换窗口后光标卡顿、热键无法唤起的问题",
     ],
 };
@@ -987,7 +987,7 @@ fn handle_key(app: &AppHandle, msg: HookMsg) {
                 drop(ov);
                 close(app);
             } else {
-                eprintln!("[wintab] 空格快速跳转：无可切换的上一个窗口");
+                eprintln!("[winhop] 空格快速跳转：无可切换的上一个窗口");
             }
         }
         HookMsg::Enter => {
@@ -1029,7 +1029,7 @@ fn handle_key(app: &AppHandle, msg: HookMsg) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     windows::redirect_stderr_to_file();
-    eprintln!("=== wintab start ===");
+    eprintln!("=== winhop start ===");
     let (cfg, cfg_path) = config::load();
     // taskmgr 等管理员程序需要提权才能钩子生效/激活；debug 构建跳过（dev 迭代不弹 UAC）
     if cfg.elevate && !cfg!(debug_assertions) && !windows::is_elevated() {
@@ -1037,7 +1037,7 @@ pub fn run() {
         return;
     }
     if !windows::acquire_single_instance() {
-        eprintln!("[wintab] 已有实例在运行，退出");
+        eprintln!("[winhop] 已有实例在运行，退出");
         return;
     }
     let shortcut = Shortcut::from_str(&cfg.hotkey)

@@ -1,6 +1,6 @@
 # ADR-004: 配置文件
 
-- 状态: 已接受 (2026-08-02)，2026-08-08 修订（配置位置迁移至用户目录）
+- 状态: 已接受 (2026-08-02)，2026-08-08 修订（配置位置迁移至用户目录），2026-08-29 修订（产品改名 WinTab → WinHop；新增 multi_letter/multi_key）
 - 关联: [[glossary]]
 
 ## 背景
@@ -9,21 +9,24 @@
 
 ## 决策
 
-**JSON 配置文件** `config.json`，位于 `%APPDATA%\WinTab\`（用户目录）。
+**JSON 配置文件** `config.json`，位于 `%APPDATA%\WinHop\`（用户目录）。
 
 > 原决策为「便携式：放 exe 目录，复制目录即迁移」，2026-08-08 修订：
 > 安装器升级/卸载重装会整体替换程序目录，exe 旁配置随之丢失。
 > 用户目录安装器不触碰，升级/重装配置保留。旧版（exe 目录/项目根）配置
-> 首次运行自动迁移：复制到 `%APPDATA%\WinTab\config.json`，旧文件保留不删。
+> 首次运行自动迁移：复制到 `%APPDATA%\WinHop\config.json`，旧文件保留不删。
+> 2026-08-29 产品改名 WinTab → WinHop：`%APPDATA%\WinTab` 整目录迁移至
+> `%APPDATA%\WinHop`（逐文件复制、跳过已存在，迁移成功后删除旧目录）。
 
 ```json
 {
   "hotkey": "ctrl+space",
   "elevate": true,
   "window_order": "zorder",
+  "multi_letter": false,
   "programs": [
-    { "key": "c", "name": "Chrome", "process": "chrome.exe" },
-    { "key": "v", "name": "VS Code", "process": "Code.exe" }
+    { "key": "c", "multi_key": "ch", "name": "Chrome", "process": "chrome.exe" },
+    { "key": "v", "multi_key": "vs", "name": "VS Code", "process": "Code.exe" }
   ]
 }
 ```
@@ -32,22 +35,24 @@
 - `hotkey`: 全局热键，默认 `ctrl+space`
 - `elevate`: release 构建是否提权运行（切换管理员程序必需，debug 构建忽略）
 - `window_order`: 窗口层排序 `zorder`/`mru`（见 ADR-003）
+- `multi_letter`: 是否启用多字母模式（连续字母筛选 + Enter 确认，突破 26 字母上限）；设置页可改
 - `programs[]`: 程序条目数组
-  - `key`: 字母代号，手动指定；启动时校验重复与非法字符，冲突则报错退出
+  - `key`: 单字母代号（单个小写字母，可空）；启动时校验重复与非法字符，冲突则报错退出
+  - `multi_key`: 多字母代号（全小写字母串，可空），多字母模式下优先于名称匹配；与 `key` 各自唯一
   - `name`: 显示名
   - `process`: 进程名（exe 文件名），用于窗口匹配（ADR-003）
 
-**缺失自动生成**：找不到配置文件时，在 `%APPDATA%\WinTab` 生成默认配置，开箱即用（APPDATA 不可用时退回 exe 目录）。
+**缺失自动生成**：找不到配置文件时，在 `%APPDATA%\WinHop` 生成默认配置，开箱即用（APPDATA 不可用时退回 exe 目录）。
 
 **运行中修改**：设置界面与「+ 号添加程序」会改写配置并立即落盘（`config.json` 保存路径 = 加载路径）。
 
-**校验规则**：`key` 不重复、唯一小写字母；`window_order` 非法值回退 `zorder`。加载失败时输出路径与错误，不静默忽略。
+**校验规则**：`key` 不重复、唯一小写字母（可空）；`multi_key` 不重复、全小写字母（可空）；`window_order` 非法值回退 `zorder`。加载失败时输出路径与错误，不静默忽略。
 
-**未实现（见 TODO）**：`wintab capture` 辅助捕获命令、`autostart` 开机自启。
+**未实现（见 TODO）**：`winhop capture` 辅助捕获命令、`autostart` 开机自启。
 
 ## 后果
 
 - 升级/卸载重装配置不丢（用户目录不受安装器影响）
-- 便携性降级：复制 exe 目录不再带配置；换机迁移需复制 `%APPDATA%\WinTab`（或重新 + 号添加）
+- 便携性降级：复制 exe 目录不再带配置；换机迁移需复制 `%APPDATA%\WinHop`（或重新 ✎ 编辑添加）
 - 不支持热重载（改动需重启），接受此限制
 - 字母冲突在启动时暴露而非运行时

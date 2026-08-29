@@ -555,7 +555,7 @@ pub fn base64(data: &[u8]) -> String {
 
 // taskmgr 等管理员程序受 UIPI 保护：非提权进程的钩子吞键被无视、SetForegroundWindow 被拒。
 // 检测当前进程是否提权，未提权则按配置自提升重启。
-// release 无控制台，stderr 无处可去；重定向到配置目录 %APPDATA%\WinTab\wintab.log
+// release 无控制台，stderr 无处可去；重定向到配置目录 %APPDATA%\WinHop\winhop.log
 // 保证日志可查（与 config.json 同目录，升级/重装不丢）。
 // 必须在任何 eprintln 之前调用（Rust 首次取 stderr 句柄时生效）。
 pub fn redirect_stderr_to_file() {
@@ -563,10 +563,10 @@ pub fn redirect_stderr_to_file() {
         let dir = std::env::var("APPDATA")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|_| std::env::temp_dir());
-        let dir = dir.join("WinTab");
+        let dir = dir.join("WinHop");
         let _ = std::fs::create_dir_all(&dir);
-        let path = dir.join("wintab.log");
-        let wide = to_wide(path.to_str().unwrap_or("wintab.log"));
+        let path = dir.join("winhop.log");
+        let wide = to_wide(path.to_str().unwrap_or("winhop.log"));
         let file = CreateFileW(
             wide.as_ptr(),
             GENERIC_WRITE,
@@ -587,7 +587,7 @@ pub fn redirect_stderr_to_file() {
 pub fn acquire_single_instance() -> bool {
     unsafe {
         static MUTEX: OnceLock<isize> = OnceLock::new();
-        let name = to_wide("WinTab_SingleInstance");
+        let name = to_wide("WinHop_SingleInstance");
         let h = CreateMutexW(std::ptr::null_mut(), 1, name.as_ptr());
         if h.is_null() {
             return true; // 创建失败保守放行
@@ -627,7 +627,7 @@ pub fn relaunch_elevated() {
         let empty = to_wide("");
         let h = ShellExecuteW(std::ptr::null_mut(), op.as_ptr(), file.as_ptr(), empty.as_ptr(), wd.as_ptr(), 1);
         if h as isize <= 32 {
-            eprintln!("[wintab] 提权重启失败 {:?}", h);
+            eprintln!("[winhop] 提权重启失败 {:?}", h);
         }
     }
 }

@@ -48,17 +48,45 @@ fn read_cfg(path: &std::path::Path) -> Config {
     cfg
 }
 
-// 配置文件放 %APPDATA%\WinTab\config.json：升级/重装安装器不碰用户目录，配置不丢。
-// 旧版配置在 exe 目录/项目根目录：首次运行自动迁移（复制到新位置，旧文件保留）。
+// 配置文件放 %APPDATA%\WinHop\config.json：升级/重装安装器不碰用户目录，配置不丢。
+// 旧版配置位置：exe 目录/项目根目录，以及改名前的 %APPDATA%\WinTab 目录——首次运行自动迁移。
 pub fn load() -> (Config, std::path::PathBuf) {
     let appdata = std::env::var("APPDATA")
         .ok()
-        .map(|d| std::path::PathBuf::from(d).join("WinTab"));
+        .map(|d| std::path::PathBuf::from(d).join("WinHop"));
     let new_path = appdata.as_ref().map(|d| d.join("config.json"));
     if let Some(p) = new_path.as_ref() {
         if p.exists() {
-            eprintln!("[wintab] 加载配置 {}", p.display());
+            eprintln!("[winhop] 加载配置 {}", p.display());
             return (read_cfg(p), p.clone());
+        }
+    }
+    // 改名迁移：%APPDATA%\WinTab 整目录搬到 WinHop（含 config.json 与旧日志），搬完旧目录删除
+    if let Some(appdata_base) = std::env::var("APPDATA").ok() {
+        let old_dir = std::path::PathBuf::from(&appdata_base).join("WinTab");
+        let old_cfg = old_dir.join("config.json");
+        if old_cfg.exists() {
+            if let Some(new_dir) = appdata.as_ref() {
+                if std::fs::create_dir_all(new_dir).is_ok() {
+                    // 逐文件复制（目标已存在的文件跳过，不覆盖新配置）
+                    if let Ok(entries) = std::fs::read_dir(&old_dir) {
+                        for ent in entries.flatten() {
+                            let from = ent.path();
+                            let to = new_dir.join(ent.file_name());
+                            if from.is_file() && !to.exists() {
+                                let _ = std::fs::copy(&from, &to);
+                            }
+                        }
+                    }
+                    if let Some(new) = new_path.as_ref() {
+                        if new.exists() {
+                            eprintln!("[winhop] 迁移改名前配置 {} → {}", old_dir.display(), new_dir.display());
+                            let _ = std::fs::remove_dir_all(&old_dir);
+                            return (read_cfg(new), new.clone());
+                        }
+                    }
+                }
+            }
         }
     }
     // 旧位置查找（exe 目录 → 当前目录 → 项目根目录），找到则迁移到 APPDATA
@@ -88,7 +116,7 @@ pub fn load() -> (Config, std::path::PathBuf) {
                     && std::fs::copy(&path, new).is_ok()
                 {
                     eprintln!(
-                        "[wintab] 迁移旧配置 {} → {}",
+                        "[winhop] 迁移旧配置 {} → {}",
                         path.display(),
                         new.display()
                     );
@@ -96,7 +124,7 @@ pub fn load() -> (Config, std::path::PathBuf) {
                 }
             }
             // APPDATA 不可用：退回旧位置（配置仍生效，只是不迁移）
-            eprintln!("[wintab] 加载配置 {}（无法迁移到 APPDATA）", path.display());
+            eprintln!("[winhop] 加载配置 {}（无法迁移到 APPDATA）", path.display());
             return (cfg, path);
         }
     }
@@ -112,14 +140,14 @@ pub fn load() -> (Config, std::path::PathBuf) {
     if let Some(dir) = appdata.as_ref() {
         let path = dir.join("config.json");
         if std::fs::create_dir_all(dir).is_ok() && std::fs::write(&path, &json).is_ok() {
-            eprintln!("[wintab] 已创建默认配置 {}", path.display());
+            eprintln!("[winhop] 已创建默认配置 {}", path.display());
             return (default, path);
         }
     }
     if let Some(d) = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())) {
         let path = d.join("config.json");
         if std::fs::write(&path, &json).is_ok() {
-            eprintln!("[wintab] 已创建默认配置 {}", path.display());
+            eprintln!("[winhop] 已创建默认配置 {}", path.display());
             return (default, path);
         }
     }
@@ -164,7 +192,7 @@ fn default_programs() -> Vec<Program> {
 fn validate(cfg: &mut Config) {
     if cfg.window_order != "zorder" && cfg.window_order != "mru" {
         eprintln!(
-            "[wintab] 配置 window_order 无效「{}」，回退为 zorder",
+            "[winhop] 配置 window_order 无效「{}」，回退为 zorder",
             cfg.window_order
         );
         cfg.window_order = "zorder".into();
