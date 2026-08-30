@@ -46,16 +46,36 @@
           </div>
 
           <div class="setting-section">
-            <div class="setting-group-title">多字母模式</div>
+            <div class="setting-group-title">模式</div>
             <label class="setting-row">
-              <input type="checkbox" id="multi-letter" />
-              <span>连续输入字母按代号/名称筛选，回车确认（关闭时单字母直切）</span>
+              <input type="radio" name="mode" value="single" checked />
+              <span>单字母模式：每个程序一个字母键，一按直达</span>
             </label>
+            <label class="setting-row">
+              <input type="radio" name="mode" value="multi" />
+              <span>多字母模式：连续输入字母按代号/名称筛选，回车确认，代号可多字母（突破 26 个上限）</span>
+            </label>
+            <div id="multi-opts" style="display:none">
+              <div class="setting-group-title" style="margin-top:12px">窗口层数字键</div>
+              <label class="setting-row">
+                <input type="radio" name="win-digit-mode" value="jump" checked />
+                <span>按数字直接跳转（窗口 ≤9 直切，&gt;9 快速连按组合编号）</span>
+              </label>
+              <label class="setting-row">
+                <input type="radio" name="win-digit-mode" value="preview" />
+                <span>按数字先聚焦预览，回车确认（窗口 &gt;9 时 Backspace 退格）</span>
+              </label>
+            </div>
           </div>
 
           <div class="setting-section">
             <div class="setting-group-title">主题</div>
             <div id="theme-options"></div>
+          </div>
+
+          <div class="setting-section">
+            <div class="setting-group-title">黑名单（已屏蔽的程序）</div>
+            <div id="blocked-list" class="blocked-list"></div>
           </div>
 
           <div class="setting-section">

@@ -1,0 +1,9 @@
+# WinHop 内置系统黑名单（首次启动播种进 config.json 的 blocked，之后可在设置页解除）
+# 这些进程的可见顶层窗口属于系统 UI，不是可切换的工作窗口。
+# 格式：每行「exe 文件名」，可用 # 追加备注。
+textinputhost.exe # 文本输入宿主：输入法候选窗、触摸键盘、emoji 面板
+startmenuexperiencehost.exe # 开始菜单
+searchhost.exe # 任务栏搜索
+searchui.exe # 搜索界面（旧版 Windows）
+shellexperiencehost.exe # Shell 弹层（通知中心、快速设置等系统 UI）
+windowsinternal.composableshell.experiences.textinput.inputapp.exe # 输入法输入面板

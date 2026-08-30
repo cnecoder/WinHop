@@ -110,11 +110,14 @@ struct Render {
     window_order: String,
     multi_letter: bool,
     theme: String,
+    win_digit_mode: String,
     filter: String,
     programs: Vec<ProgramUi>,
     windows: Vec<WindowUi>,
     page: usize,
     page_count: usize,
+    /// 多字母模式窗口层：已输入的窗口索引（数字串），用于提示；Enter 确认
+    win_digit: String,
 }
 
 // 计算单个条目对输入串的匹配得分：多字母快捷键优先（精确>前缀>子串），
@@ -192,14 +195,19 @@ fn emit(app: &AppHandle, inner: &Inner, ov: &OverlayState) {
         window_order: cfg.window_order.clone(),
         multi_letter: multi,
         theme: cfg.theme.clone(),
+        win_digit_mode: cfg.win_digit_mode.clone(),
         filter: if multi { ov.letter_buf.clone() } else { String::new() },
         programs: Vec::new(),
         windows: Vec::new(),
         page: page + 1,
         page_count,
+        win_digit: String::new(),
     };
     if ov.phase == Phase::Windows {
         render.phase = "windows".into();
+        if multi {
+            render.win_digit = ov.digit_buf.clone();
+        }
         if let Some(proc) = &ov.sel_proc {
             let entry = ov
                 .prog_list
@@ -333,13 +341,16 @@ fn open(app: &AppHandle) {
         return;
     }
     let mut all: Vec<WinInfo> = windows::enum_windows();
+    let cfg = inner.cfg.lock().unwrap().clone();
     let mut wins_by_proc: HashMap<String, Vec<WinInfo>> = HashMap::new();
     for w in all.drain(..) {
+        if cfg.blocked.iter().any(|b| b.process() == w.process) {
+            continue; // 黑名单（系统预置 + 用户屏蔽）
+        }
         wins_by_proc.entry(w.process.clone()).or_default().push(w);
     }
     let mut ov = inner.overlay.lock().unwrap();
     ov.phase = Phase::Programs;
-    let cfg = inner.cfg.lock().unwrap().clone();
     ov.prog_list = build_prog_list(&cfg, &wins_by_proc, cfg.multi_letter);
     ov.wins_by_proc = wins_by_proc;
     ov.prog_sel = 0;
@@ -432,11 +443,13 @@ fn close(app: &AppHandle) {
         window_order: cfg.window_order.clone(),
         multi_letter: cfg.multi_letter,
         theme: cfg.theme.clone(),
+        win_digit_mode: cfg.win_digit_mode.clone(),
         filter: String::new(),
         programs: Vec::new(),
         windows: Vec::new(),
         page: 1,
         page_count: 1,
+        win_digit: String::new(),
     };
     drop(cfg);
     let _ = app.emit("overlay", &render);
@@ -569,6 +582,12 @@ fn key(app: AppHandle, k: String) {
             HookMsg::Letter(s[7..].chars().next().unwrap_or(' '))
         }
         s if s.starts_with("digit:") => HookMsg::Digit(s[6..].chars().next().unwrap_or('0')),
+        s if s.starts_with("jump:") => HookMsg::Jump(
+            s[5..]
+                .parse::<usize>()
+                .map(|n| n.saturating_sub(1))
+                .unwrap_or(0),
+        ),
         _ => return,
     };
     handle_key(&app, msg);
@@ -709,18 +728,71 @@ fn edit_program(
         key
     );
     if inner.visible.load(Ordering::Relaxed) {
-        let mut ov = inner.overlay.lock().unwrap();
-        let cfg = inner.cfg.lock().unwrap().clone();
-        ov.prog_list = build_prog_list(&cfg, &ov.wins_by_proc, cfg.multi_letter);
-        ov.prog_sel = 0;
-        ov.prog_page = 0;
-        ov.letter_buf.clear();
-        emit(&app, &inner, &ov);
+        rebuild_and_emit(&app, &inner);
     }
     Ok(())
 }
 
-// 点击程序行：按 process 选中当前高亮项之外的任意行（多字母模式代号可能多字母，
+// 从当前可见窗口重建程序列表并 emit（编辑/屏蔽后刷新覆盖层）
+fn rebuild_and_emit(app: &AppHandle, inner: &Inner) {
+    let mut ov = inner.overlay.lock().unwrap();
+    let cfg = inner.cfg.lock().unwrap().clone();
+    // 重新枚举，让新屏蔽的程序从 wins_by_proc 中消失
+    let mut wins: HashMap<String, Vec<WinInfo>> = HashMap::new();
+    for w in windows::enum_windows() {
+        if cfg.blocked.iter().any(|b| b.process() == w.process) {
+            continue;
+        }
+        wins.entry(w.process.clone()).or_default().push(w);
+    }
+    ov.wins_by_proc = wins;
+    ov.prog_list = build_prog_list(&cfg, &ov.wins_by_proc, cfg.multi_letter);
+    ov.prog_sel = 0;
+    ov.prog_page = 0;
+    ov.letter_buf.clear();
+    emit(app, inner, &ov);
+}
+
+// 屏蔽程序：加入黑名单（note 取程序显示名，方便设置页对应；同时移除已配置代号，避免占键位）
+#[tauri::command]
+fn block_program(app: AppHandle, process: String, note: String) -> Result<(), String> {
+    let process = process.to_lowercase();
+    let inner = app.state::<Inner>();
+    {
+        let mut cfg = inner.cfg.lock().unwrap();
+        cfg.blocked.retain(|b| b.process() != process);
+        cfg.blocked.push(config::Blocked::Entry {
+            process: process.clone(),
+            note: note.trim().to_string(),
+        });
+        cfg.blocked.sort_by(|a, b| a.process().cmp(b.process()));
+        // 屏蔽即移除其配置条目（代号/名称），不再出现在列表也不占键
+        cfg.programs.retain(|p| p.process != process);
+        config::save(&cfg, &inner.cfg_path).map_err(|e| format!("保存配置失败: {}", e))?;
+    }
+    eprintln!("[t={}] 屏蔽程序 {} ({})", windows::now_ms(), process, note);
+    if inner.visible.load(Ordering::Relaxed) {
+        rebuild_and_emit(&app, &inner);
+    }
+    Ok(())
+}
+
+// 解除屏蔽
+#[tauri::command]
+fn unblock_program(app: AppHandle, process: String) -> Result<(), String> {
+    let process = process.to_lowercase();
+    let inner = app.state::<Inner>();
+    {
+        let mut cfg = inner.cfg.lock().unwrap();
+        cfg.blocked.retain(|b| b.process() != process);
+        config::save(&cfg, &inner.cfg_path).map_err(|e| format!("保存配置失败: {}", e))?;
+    }
+    eprintln!("[t={}] 解除屏蔽 {}", windows::now_ms(), process);
+    if inner.visible.load(Ordering::Relaxed) {
+        rebuild_and_emit(&app, &inner);
+    }
+    Ok(())
+}
 // 不能复用 letter 路径）。若该行已高亮则等同 Enter 确认。
 #[tauri::command]
 fn pick_program(app: AppHandle, process: String) {
@@ -786,8 +858,16 @@ struct SettingsInfo {
     window_order: String,
     multi_letter: bool,
     theme: String,
+    win_digit_mode: String,
     themes: Vec<ThemeUi>,
+    blocked: Vec<BlockedUi>,
     changelog: ChangelogUi,
+}
+
+#[derive(Serialize, Clone)]
+struct BlockedUi {
+    process: String,
+    note: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -824,11 +904,20 @@ fn get_settings(app: AppHandle) -> SettingsInfo {
         window_order: cfg.window_order.clone(),
         multi_letter: cfg.multi_letter,
         theme: cfg.theme.clone(),
+        win_digit_mode: cfg.win_digit_mode.clone(),
         themes: config::THEMES
             .iter()
             .map(|id| ThemeUi {
                 id: (*id).into(),
                 name: theme_name(id).into(),
+            })
+            .collect(),
+        blocked: cfg
+            .blocked
+            .iter()
+            .map(|b| BlockedUi {
+                process: b.process().to_string(),
+                note: b.note().to_string(),
             })
             .collect(),
         changelog: ChangelogUi {
@@ -844,6 +933,10 @@ struct SettingsInput {
     window_order: String,
     multi_letter: bool,
     theme: String,
+    win_digit_mode: String,
+    /// 设置页保存时黑名单保留的进程名（被解除的不在其中）
+    #[serde(default)]
+    blocked: Vec<String>,
 }
 
 // 批量保存设置（设置页点保存时调用）
@@ -855,18 +948,21 @@ fn save_settings(app: AppHandle, input: SettingsInput) -> Result<(), String> {
     if !config::THEMES.contains(&input.theme.as_str()) {
         return Err(format!("无效的主题「{}」", input.theme));
     }
+    if input.win_digit_mode != "jump" && input.win_digit_mode != "preview" {
+        return Err(format!("无效的数字键行为「{}」", input.win_digit_mode));
+    }
     let inner = app.state::<Inner>();
-    let changed = {
+    {
         let mut cfg = inner.cfg.lock().unwrap();
-        let changed = cfg.window_order != input.window_order
-            || cfg.multi_letter != input.multi_letter
-            || cfg.theme != input.theme;
         cfg.window_order = input.window_order.clone();
         cfg.multi_letter = input.multi_letter;
         cfg.theme = input.theme.clone();
+        cfg.win_digit_mode = input.win_digit_mode.clone();
+        // 黑名单：设置页保存保留列表之外的（被解除的）才移除
+        let keep: HashSet<String> = input.blocked.iter().map(|b| b.to_lowercase()).collect();
+        cfg.blocked.retain(|b| keep.contains(b.process()));
         config::save(&cfg, &inner.cfg_path).map_err(|e| format!("保存配置失败: {}", e))?;
-        changed
-    };
+    }
     eprintln!(
         "[t={}] 保存设置 order={} multi_letter={} theme={}",
         windows::now_ms(),
@@ -874,16 +970,16 @@ fn save_settings(app: AppHandle, input: SettingsInput) -> Result<(), String> {
         input.multi_letter,
         input.theme
     );
-    if changed && inner.visible.load(Ordering::Relaxed) {
-        let mut ov = inner.overlay.lock().unwrap();
-        let cfg = inner.cfg.lock().unwrap().clone();
-        ov.prog_list = build_prog_list(&cfg, &ov.wins_by_proc, cfg.multi_letter);
-        ov.prog_sel = 0;
-        ov.prog_page = 0;
-        ov.letter_buf.clear();
-        emit(&app, &inner, &ov);
-    }
     Ok(())
+}
+
+// 设置页保存关闭后：重新枚举并 emit，让程序列表立即按新设置（模式/黑名单等）刷新
+#[tauri::command]
+fn refresh_overlay(app: AppHandle) {
+    let inner = app.state::<Inner>();
+    if inner.visible.load(Ordering::Relaxed) {
+        rebuild_and_emit(&app, &inner);
+    }
 }
 
 fn handle_key(app: &AppHandle, msg: HookMsg) {
@@ -958,17 +1054,70 @@ fn handle_key(app: &AppHandle, msg: HookMsg) {
                 }
                 ov.prog_page = 0;
                 emit(app, &inner, &ov);
+            } else if ov.phase == Phase::Windows
+                && inner.cfg.lock().unwrap().multi_letter
+                && ov.wins.len() > 9
+                && !ov.digit_buf.is_empty()
+            {
+                // 多字母模式且窗口 >9（组合编号）：删一位，剩余索引有效则回退聚焦
+                ov.digit_buf.pop();
+                if let Ok(n) = ov.digit_buf.parse::<usize>() {
+                    if n >= 1 && n <= ov.wins.len() {
+                        ov.active = n - 1;
+                    }
+                }
+                emit(app, &inner, &ov);
             }
         }
         HookMsg::Digit(d) => {
             if ov.phase != Phase::Windows || ov.wins.is_empty() {
                 return;
             }
-            ov.digit_buf.push(d);
-            if let Ok(n) = ov.digit_buf.parse::<usize>() {
-                let total = ov.wins.len();
-                // n*10 > total：再加任何一位都会超过总数，此刻立即兑现
-                if n >= 1 && n * 10 > total && resolve_window(&inner, &mut ov, n) {
+            let multi = inner.cfg.lock().unwrap().multi_letter;
+            let preview_mode = inner.cfg.lock().unwrap().win_digit_mode == "preview";
+            let total = ov.wins.len();
+            if !multi {
+                // 单字母模式：数字累积，n*10 > total（再加一位必超总数）立即跳转
+                ov.digit_buf.push(d);
+                if let Ok(n) = ov.digit_buf.parse::<usize>() {
+                    if n >= 1 && n * 10 > total && resolve_window(&inner, &mut ov, n) {
+                        drop(ov);
+                        close(app);
+                    }
+                }
+            } else if total <= 9 {
+                // 窗口 ≤9：每个数字独立，按到即定（无需退格/组合）
+                let n = d.to_digit(10).unwrap_or(0) as usize;
+                if n < 1 || n > total {
+                    return;
+                }
+                ov.digit_buf = n.to_string();
+                if preview_mode {
+                    ov.active = n - 1;
+                    emit(app, &inner, &ov);
+                } else if resolve_window(&inner, &mut ov, n) {
+                    drop(ov);
+                    close(app);
+                }
+            } else {
+                // 窗口 >9：组合编号（1 然后 2 = 12），Backspace 退格
+                ov.digit_buf.push(d);
+                let n = match ov.digit_buf.parse::<usize>() {
+                    Ok(n) => n,
+                    Err(_) => {
+                        ov.digit_buf.pop();
+                        return;
+                    }
+                };
+                if n < 1 || n > total {
+                    ov.digit_buf.pop(); // 超界，忽略本次输入
+                    return;
+                }
+                ov.active = n - 1; // Enter 也可确认当前输入
+                if preview_mode {
+                    emit(app, &inner, &ov);
+                } else if n * 10 > total && resolve_window(&inner, &mut ov, n) {
+                    // 再加一位必超总数 → 立即跳转；否则等下一位或 Enter 确认
                     drop(ov);
                     close(app);
                 }
@@ -1067,6 +1216,13 @@ fn handle_key(app: &AppHandle, msg: HookMsg) {
                 eprintln!("[winhop] 空格快速跳转：无可切换的上一个窗口");
             }
         }
+        HookMsg::Jump(n) => {
+            // 点击窗口行：直接跳转（0-based → resolve 用 1-based）
+            if ov.phase == Phase::Windows && resolve_window(&inner, &mut ov, n + 1) {
+                drop(ov);
+                close(app);
+            }
+        }
         HookMsg::Enter => {
             let done = match ov.phase {
                 Phase::Programs => {
@@ -1146,6 +1302,9 @@ pub fn run() {
             thumb_clear,
             toggle_fullscreen,
             edit_program,
+            block_program,
+            unblock_program,
+            refresh_overlay,
             pick_program
         ])
         .setup(move |app| {

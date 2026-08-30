@@ -11,6 +11,7 @@ const confirmMask = document.getElementById("confirm-mask");
 let settingsOpen = false;
 let state = null;
 let settingsLoaded = null; // 已保存的设置快照，用于判断是否改动
+let blockedState = null; // 设置页黑名单本地暂存（解除不立即生效，保存后统一写入）
 
 function escapeHtml(s) {
   return s.replace(
@@ -29,10 +30,14 @@ function applyTheme(id) {
 function readSettingsForm() {
   const order = document.querySelector('input[name="order"]:checked');
   const theme = document.querySelector('input[name="theme"]:checked');
+  const mode = document.querySelector('input[name="mode"]:checked');
+  const wdm = document.querySelector('input[name="win-digit-mode"]:checked');
   return {
     window_order: order ? order.value : "zorder",
-    multi_letter: document.getElementById("multi-letter").checked,
+    multi_letter: (mode ? mode.value : "single") === "multi",
     theme: theme ? theme.value : "black-green",
+    win_digit_mode: wdm ? wdm.value : "jump",
+    blocked: (blockedState || []).map((b) => b.process),
   };
 }
 
@@ -40,10 +45,14 @@ function readSettingsForm() {
 function settingsDirty() {
   if (!settingsLoaded) return false;
   const cur = readSettingsForm();
+  const curBlocked = [...(cur.blocked || [])].sort().join(",");
+  const savedBlocked = [...(settingsLoaded.blocked || [])].sort().join(",");
   return (
     cur.window_order !== settingsLoaded.window_order ||
     cur.multi_letter !== settingsLoaded.multi_letter ||
-    cur.theme !== settingsLoaded.theme
+    cur.theme !== settingsLoaded.theme ||
+    cur.win_digit_mode !== settingsLoaded.win_digit_mode ||
+    curBlocked !== savedBlocked
   );
 }
 
@@ -64,11 +73,24 @@ async function openSettings() {
     window_order: info.window_order,
     multi_letter: info.multi_letter,
     theme: info.theme,
+    win_digit_mode: info.win_digit_mode || "jump",
+    blocked: (info.blocked || []).map((b) => b.process).sort(),
   };
   document.querySelectorAll('input[name="order"]').forEach((r) => {
     r.checked = r.value === info.window_order;
   });
-  document.getElementById("multi-letter").checked = !!info.multi_letter;
+  const modeVal = info.multi_letter ? "multi" : "single";
+  document.querySelectorAll('input[name="mode"]').forEach((r) => {
+    r.checked = r.value === modeVal;
+    r.onchange = () => {
+      syncMultiOpts();
+      updateSettingsState();
+    };
+  });
+  syncMultiOpts();
+  document.querySelectorAll('input[name="win-digit-mode"]').forEach((r) => {
+    r.checked = r.value === (info.win_digit_mode || "jump");
+  });
   // 主题单选项由后端主题表动态生成
   const themeBox = document.getElementById("theme-options");
   themeBox.innerHTML = (info.themes || [])
@@ -89,6 +111,7 @@ async function openSettings() {
     });
   });
   applyTheme(info.theme);
+  renderBlocked(info.blocked || []);
   document.getElementById("version-info").textContent = "版本 " + info.version;
   const e = info.changelog;
   document.getElementById("changelog").innerHTML =
@@ -108,6 +131,57 @@ function closeSettings() {
   overlayView.hidden = false;
 }
 
+// 黑名单列表（设置页本地暂存：解除不立即生效，保存后统一写入）
+function renderBlocked(blocked) {
+  blockedState = blocked.map((b) => ({ ...b }));
+  renderBlockedUi();
+}
+
+function renderBlockedUi() {
+  const box = document.getElementById("blocked-list");
+  const blocked = blockedState || [];
+  if (!blocked.length) {
+    box.innerHTML = `<span class="blocked-empty">无；在程序行 ✎ 编辑面板点「屏蔽」可添加</span>`;
+    updateSettingsState();
+    return;
+  }
+  box.innerHTML = "";
+  for (const item of blocked) {
+    const row = document.createElement("div");
+    row.className = "blocked-row";
+    const left = document.createElement("span");
+    left.className = "blocked-name";
+    const procName = document.createElement("b");
+    procName.textContent = item.process;
+    left.appendChild(procName);
+    if (item.note) {
+      const note = document.createElement("span");
+      note.className = "blocked-note";
+      note.textContent = item.note;
+      left.appendChild(note);
+    }
+    const btn = document.createElement("button");
+    btn.className = "blocked-unblock";
+    btn.textContent = "解除";
+    btn.addEventListener("click", () => {
+      // 仅本地移除，保存后才真正生效
+      blockedState = blockedState.filter((b) => b.process !== item.process);
+      renderBlockedUi();
+    });
+    row.appendChild(left);
+    row.appendChild(btn);
+    box.appendChild(row);
+  }
+  updateSettingsState();
+}
+
+// 多字母专属选项：仅选中多字母模式时显示
+function syncMultiOpts() {
+  const mode = document.querySelector('input[name="mode"]:checked');
+  document.getElementById("multi-opts").style.display =
+    mode && mode.value === "multi" ? "" : "none";
+}
+
 // 返回/ESC 时若有未保存改动则弹确认
 function requestCloseSettings() {
   if (settingsDirty()) {
@@ -123,6 +197,15 @@ async function saveSettingsAndClose() {
   settingsLoaded = input;
   updateSettingsState();
   closeSettings();
+  // 保存后重新枚举并刷新列表（模式切换、黑名单解除等立即生效）
+  invoke("refresh_overlay");
+}
+
+// 窗口层标题：多字母 + preview 模式提示数字聚焦/组合；其它模式只显示程序名
+function winHint(s) {
+  if (!s.multi_letter || s.win_digit_mode !== "preview") return s.title;
+  if (s.win_digit) return `${s.title} · 已输入 ${s.win_digit}（Enter 跳转，Backspace 删除）`;
+  return `${s.title} · 输入数字聚焦窗口，Enter 跳转`;
 }
 
 function renderHeader(s) {
@@ -199,9 +282,11 @@ document.getElementById("settings-back").addEventListener("click", () => {
   requestCloseSettings();
 });
 
-document.querySelectorAll('input[name="order"], #multi-letter').forEach((el) => {
-  el.addEventListener("change", updateSettingsState);
-});
+document
+  .querySelectorAll('input[name="order"], input[name="mode"], input[name="win-digit-mode"]')
+  .forEach((el) => {
+    el.addEventListener("change", updateSettingsState);
+  });
 
 document.getElementById("settings-save").addEventListener("click", () => {
   saveSettingsAndClose();
@@ -232,7 +317,8 @@ listEl.addEventListener("click", (e) => {
   const row = e.target.closest(".row, .wrow");
   if (!row) return;
   if (state && state.phase === "windows" && row.dataset.idx) {
-    invoke("key", { k: "digit:" + row.dataset.idx });
+    // 点击=明确选择，直接跳转（键盘数字在多字母模式只聚焦）
+    invoke("key", { k: "jump:" + row.dataset.idx });
   } else if (state && state.phase === "programs" && row.dataset.process) {
     // 多字母模式代号可能多字母，统一按 process 选中；单字母也适用
     invoke("pick_program", { process: row.dataset.process });
@@ -274,6 +360,19 @@ function startEditProgram(btn) {
   const confirmBtn = document.createElement("button");
   confirmBtn.className = "confirm-btn";
   confirmBtn.textContent = "保存";
+
+  const blockBtn = document.createElement("button");
+  blockBtn.className = "block-btn";
+  blockBtn.textContent = "屏蔽";
+  blockBtn.title = "从此列表中隐藏该程序（设置页可解除）";
+  blockBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    invoke("block_program", { process: prog.process, note: nameInput.value.trim() || prog.name || "" })
+      .then(() => {
+        panel.remove();
+        btn.style.display = "";
+      });
+  });
 
   // 单字母模式显示可用字母提示；多字母模式提示代号规则
   let hint;
@@ -350,6 +449,7 @@ function startEditProgram(btn) {
   fields.appendChild(keyInput);
   fields.appendChild(nameInput);
   fields.appendChild(confirmBtn);
+  fields.appendChild(blockBtn);
   panel.appendChild(fields);
   panel.appendChild(hint);
   btn.style.display = "none";
@@ -480,13 +580,14 @@ function render(s) {
   if (settingsOpen) return;
   renderHeader(s);
   if (s.phase === "windows") {
-    titleEl.textContent = s.title;
+    titleEl.textContent = winHint(s);
     const winKey = s.windows.map((w) => w.hwnd).join(",");
     if (lastWinKey === winKey && listEl.querySelector(".wrow")) {
       // 同一批窗口：只更新选中态，避免整列表重建导致预览闪烁
       listEl.querySelectorAll(".wrow").forEach((row, i) => {
         row.classList.toggle("active", !!(s.windows[i] && s.windows[i].active));
       });
+      titleEl.textContent = winHint(s);
       scrollActiveIntoView();
       updatePreview();
     } else {
@@ -553,7 +654,7 @@ function render(s) {
             const wide = p.key && p.key.length > 1 ? " key-wide" : "";
             return (
               `<div class="row${p.active ? " active" : ""}${p.running ? "" : " off"}" data-key="${escapeHtml(p.key)}" data-process="${escapeHtml(p.process)}">` +
-              `<span class="${keyCls}${wide}">${hasKey ? escapeHtml(p.key) : "·"}</span>` +
+              `<span class="key-slot"><span class="${keyCls}${wide}">${hasKey ? escapeHtml(p.key) : "·"}</span></span>` +
               `<span class="name">${escapeHtml(p.name)} (${escapeHtml(p.process)})</span>` +
               `<span class="screen">${p.running ? "×" + p.count : "未运行"}</span>` +
               `<button class="edit-btn" title="编辑">✎</button>` +

@@ -260,14 +260,27 @@ body {
 }
 
 /* 选中态：tint 填充 + inset 内描边（非外发光、非硬 outline） */
-.row.active {
+/* 选中/悬停高亮只套软件名称卡片，不框住左侧字母代号 */
+.row.active,
+.row:hover {
+  background: none;
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.row .name {
+  border-radius: var(--r-row);
+  padding: 8px 12px;
+  margin: -8px 0;
+}
+
+.row.active .name {
   background: rgba(var(--accent-rgb), 0.12);
   box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), 0.45);
 }
 
-.row:hover {
+.row:hover .name {
   background: rgba(var(--line-rgb), 0.07);
-  cursor: pointer;
 }
 
 .key {
@@ -283,9 +296,22 @@ body {
   border-radius: var(--r-sm);
 }
 
-/* 多字母代号：自适应宽度，不强制 26px */
-.key.key-wide {
-  min-width: 42px;
+/* 程序行代号槽：固定宽，软件名始终从槽右沿对齐；徽章右对齐在槽内，
+   短代号居槽右、超长代号（>5 字符）向左延伸，不截断也不顶乱名字列 */
+.row .key-slot {
+  flex: 0 0 52px;
+  width: 52px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.row .key-slot .key {
+  flex: none;
+  max-width: none;
+  min-width: 0;
+  padding: 1px 6px;
+  box-sizing: border-box;
 }
 
 /* 未配置代号（多字母模式下未分配 multi_key）：无框占位 */
@@ -404,6 +430,79 @@ body {
 
 .confirm-btn:hover {
   background: rgba(var(--accent-rgb), 0.26);
+}
+
+/* 编辑面板「屏蔽」按钮：次要危险操作 */
+.block-btn {
+  background: none;
+  border: 1px solid rgba(var(--line-rgb), 0.2);
+  color: var(--dim);
+  border-radius: var(--r-control);
+  font-size: 13px;
+  padding: 3px 14px;
+  cursor: pointer;
+  transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+
+.block-btn:hover {
+  color: var(--error);
+  border-color: var(--error);
+}
+
+/* 设置页黑名单 */
+.blocked-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.blocked-empty {
+  font-size: 13px;
+  color: var(--off);
+}
+
+.blocked-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 5px 10px;
+  border-radius: var(--r-control);
+  background: var(--surface-2);
+}
+
+.blocked-name {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--fg);
+  word-break: break-all;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  align-items: baseline;
+}
+
+.blocked-note {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--dim);
+}
+
+.blocked-unblock {
+  background: none;
+  border: 1px solid rgba(var(--line-rgb), 0.2);
+  color: var(--dim);
+  border-radius: var(--r-control);
+  font-size: 12px;
+  padding: 2px 12px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+
+.blocked-unblock:hover {
+  color: var(--accent);
+  border-color: var(--accent);
 }
 
 .free-hint {

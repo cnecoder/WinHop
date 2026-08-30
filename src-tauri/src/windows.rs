@@ -59,6 +59,7 @@ pub enum HookMsg {
     Backspace,
     Space,
     Enter,
+    Jump(usize),
     ClickOutside,
 }
 

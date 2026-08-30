@@ -11,7 +11,70 @@ pub struct Config {
     pub multi_letter: bool,
     #[serde(default = "default_theme")]
     pub theme: String,
+    /// 多字母模式窗口层数字键行为："jump" 按数字直接跳转（默认）；"preview" 先聚焦预览、Enter 跳转
+    #[serde(default = "default_win_digit_mode")]
+    pub win_digit_mode: String,
     pub programs: Vec<Program>,
+    /// 黑名单：命中的程序不进入列表。
+    /// 首次/老配置播种 system-blocklist.txt 的系统默认项，之后完全由用户控制（设置页可解除）。
+    /// 序列化兼容两种形式：裸字符串 "a.exe"（用户屏蔽，无备注）或 {"process":"a.exe","note":".."}（带备注）
+    #[serde(default)]
+    pub blocked: Vec<Blocked>,
+    /// 黑名单是否已播种系统默认（仅播种一次；用户解除后不再补回）
+    #[serde(default)]
+    pub blocked_seeded: bool,
+}
+
+/// 黑名单条目：process 为小写 exe 名，note 为说明（系统预置项带备注，用户屏蔽项为空）
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(untagged)]
+pub enum Blocked {
+    Name(String),
+    Entry {
+        process: String,
+        #[serde(default)]
+        note: String,
+    },
+}
+
+impl Blocked {
+    pub fn process(&self) -> &str {
+        match self {
+            Blocked::Name(s) => s,
+            Blocked::Entry { process, .. } => process,
+        }
+    }
+    pub fn note(&self) -> &str {
+        match self {
+            Blocked::Name(_) => "",
+            Blocked::Entry { note, .. } => note,
+        }
+    }
+}
+
+// 系统默认黑名单种子（来自随程序分发的 system-blocklist.txt，格式「exe 名 # 备注」）
+fn default_blocked() -> Vec<Blocked> {
+    include_str!("../system-blocklist.txt")
+        .lines()
+        .filter_map(|l| {
+            let l = l.trim();
+            if l.is_empty() || l.starts_with('#') {
+                return None;
+            }
+            let (proc, note) = match l.split_once('#') {
+                Some((p, n)) => (p.trim(), n.trim()),
+                None => (l, ""),
+            };
+            let proc = proc.to_lowercase();
+            if proc.is_empty() {
+                return None;
+            }
+            Some(Blocked::Entry {
+                process: proc,
+                note: note.to_string(),
+            })
+        })
+        .collect()
 }
 
 fn default_true() -> bool {
@@ -24,6 +87,10 @@ fn default_window_order() -> String {
 
 fn default_theme() -> String {
     "black-green".into()
+}
+
+fn default_win_digit_mode() -> String {
+    "jump".into()
 }
 
 #[derive(Deserialize, Serialize, Clone)]
@@ -50,6 +117,50 @@ fn read_cfg(path: &std::path::Path) -> Config {
         p.process = p.process.to_lowercase();
         p.key = p.key.to_lowercase();
         p.multi_key = p.multi_key.to_lowercase();
+    }
+    for b in &mut cfg.blocked {
+        match b {
+            Blocked::Name(s) => *s = s.trim().to_lowercase(),
+            Blocked::Entry { process, .. } => *process = process.trim().to_lowercase(),
+        }
+    }
+    cfg.blocked.retain(|b| !b.process().is_empty());
+    cfg.blocked.sort_by(|a, b| a.process().cmp(b.process()));
+    cfg.blocked.dedup_by(|a, b| a.process() == b.process());
+    // 首次/老配置（blocked_seeded 缺省为 false）：播种系统默认黑名单一次。
+    // 之后完全交给用户——解除即写盘，不再补回。
+    if !cfg.blocked_seeded {
+        for d in default_blocked() {
+            if !cfg.blocked.iter().any(|b| b.process() == d.process()) {
+                cfg.blocked.push(d);
+            }
+        }
+        cfg.blocked.sort_by(|a, b| a.process().cmp(b.process()));
+        cfg.blocked.dedup_by(|a, b| a.process() == b.process());
+        cfg.blocked_seeded = true;
+        let _ = save(&cfg, path); // 持久化播种结果，失败不影响运行
+    }
+    // 给已播种但缺备注的系统项补说明（升级老数据：早期版本播种无备注）
+    let sys = default_blocked();
+    let sys_notes: std::collections::HashMap<&str, &str> = sys
+        .iter()
+        .map(|b| (b.process(), b.note()))
+        .filter(|(_, n)| !n.is_empty())
+        .collect();
+    let mut note_fixed = false;
+    for b in cfg.blocked.iter_mut() {
+        if b.note().is_empty() {
+            if let Some(note) = sys_notes.get(b.process()) {
+                *b = Blocked::Entry {
+                    process: b.process().to_string(),
+                    note: (*note).to_string(),
+                };
+                note_fixed = true;
+            }
+        }
+    }
+    if note_fixed {
+        let _ = save(&cfg, path);
     }
     cfg
 }
@@ -141,7 +252,10 @@ pub fn load() -> (Config, std::path::PathBuf) {
         window_order: "zorder".into(),
         multi_letter: false,
         theme: default_theme(),
+        win_digit_mode: default_win_digit_mode(),
         programs: default_programs(),
+        blocked: default_blocked(),
+        blocked_seeded: true,
     };
     let json = serde_json::to_string_pretty(&default).expect("序列化默认配置失败");
     if let Some(dir) = appdata.as_ref() {
@@ -214,6 +328,13 @@ fn validate(cfg: &mut Config) {
             THEMES[0]
         );
         cfg.theme = THEMES[0].into();
+    }
+    if cfg.win_digit_mode != "jump" && cfg.win_digit_mode != "preview" {
+        eprintln!(
+            "[winhop] 配置 win_digit_mode 无效「{}」，回退为 jump",
+            cfg.win_digit_mode
+        );
+        cfg.win_digit_mode = "jump".into();
     }
     let mut seen_key = std::collections::HashSet::new();
     let mut seen_mk = std::collections::HashSet::new();
