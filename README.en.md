@@ -122,3 +122,12 @@ The config file `config.json` lives in `%APPDATA%\WinHop\` (survives upgrades/re
 | `programs[]` | Program entries: `key` single-letter code (one lowercase letter, may be empty), `multi_key` multi-letter code (lowercase letters, may be empty), `name` display name, `process` exe file name (lowercase). |
 
 `key` and `multi_key` are each unique and may each be empty (when using only the other mode). The default config ships with two sets of codes for common software. Edits made via the settings page or ✎ are saved to this file immediately.
+
+## Support
+
+WinHop is free and open source, and it will stay that way. If it genuinely saves you time and you'd like to, you can buy the author a coffee — it's a huge encouragement to keep maintaining it. Sponsoring is entirely optional and never required to use the app.
+
+<div align="center">
+  <img src="assets/sponsor-wechat.jpg" alt="WeChat Pay" width="240" />
+  <img src="assets/sponsor-alipay.jpg" alt="Alipay" width="240" />
+</div>

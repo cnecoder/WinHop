@@ -122,3 +122,12 @@ Ctrl+Space（默认热键，可配置）
 | `programs[]` | 程序条目：`key` 单字母代号（单个小写字母，可空）、`multi_key` 多字母代号（全小写字母，可空）、`name` 显示名、`process` exe 文件名（小写） |
 
 `key` 与 `multi_key` 各自唯一、均可为空（只用另一种模式时）。默认配置预置了常用软件的两套代号。运行中通过设置页或 ✎ 编辑修改会立即落盘到该文件。
+
+## 赞助
+
+WinHop 免费、开源，会一直免费下去。如果它确实帮你省了时间，你愿意的话可以请作者喝杯咖啡，这是对持续维护最大的鼓励。当然，不赞助也完全不影响使用。
+
+<div align="center">
+  <img src="assets/sponsor-wechat.jpg" alt="微信支付" width="240" />
+  <img src="assets/sponsor-alipay.jpg" alt="支付宝" width="240" />
+</div>
