@@ -61,9 +61,9 @@ dev 版不主动杀，交给用户实测。手动验证清单见 [build.md](buil
 | 切到别的虚拟桌面的窗口无效 | 已知限制（`activate_with_retry` 日志 `可能在另一个虚拟桌面`），见 TODO |
 | 配置改坏启动崩 | `read_cfg` 解析失败会 panic；日志看 `解析/读取 config.json 失败`。配置写入是原子的（tmp+rename） |
 
-## 既有排障记录
+## 排障记录归档
 
-- [debug-hotkey-hang.md](debug-hotkey-hang.md)：热键录制功能导致「热键一轮失效 + 主线程卡死」的完整复盘（功能已回退，分支 `hotkey-settings-wip`）。
+- 「热键录制导致热键一轮失效 + 主线程卡死」的完整复盘随已回退功能一并归档于分支 `hotkey-settings-wip`（主线不再保留该文档）；教训是插件热键反复注销/注册会打乱分发表，且主线程转发路径易卡死，重做时见该分支。
 
 ## 提交/发布
 

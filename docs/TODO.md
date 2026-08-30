@@ -23,7 +23,7 @@
 
 ## 工程
 
-- [ ] **热键设置界面**（暂停中）：设置/录制全局热键曾引入「热键一轮后失效 + 主线程卡死」问题，已回退至 c47eac6，代码存于分支 `hotkey-settings-wip`，详见[排障记录](debug-hotkey-hang.md)
+- [ ] **热键设置界面**（暂停中）：设置/录制全局热键曾引入「热键一轮后失效 + 主线程卡死」问题，已回退；代码与复盘存于分支 `hotkey-settings-wip`（重做前必读，教训见 [debug.md](debug.md)）
 - [ ] **自动化测试**：状态机逻辑可抽离做单元测试；窗口枚举/激活需集成测试（现有少量版本资源回归测试，见 `windows.rs` tests）
 - [ ] **CI**：GitHub Actions 构建 release 产物并自动发布（当前手动打包上传，流程见 [release.md](release.md)）
 

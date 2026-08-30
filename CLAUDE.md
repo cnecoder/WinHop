@@ -40,4 +40,4 @@ Windows 窗口快速切换器（Rust + Tauri 2 / WebView2，Windows-only）。�
 
 ## Release 要点
 
-发版：改三处版本号（tauri.conf.json / Cargo.toml / lib.rs 的 `CURRENT_CHANGELOG`）→ 更新 `CURRENT_CHANGELOG` 的 `notes_zh`/`notes_en`（设置页双语更新记录）→ 写 `docs/release-vX.Y.Z.md`（中英双语）→ `npm run tauri build` → 打 tag 推送 → 建 GitHub Release（流程见 release.md）。
+发版：改三处版本号（tauri.conf.json / Cargo.toml / lib.rs 的 `CURRENT_CHANGELOG`）→ 更新 `CURRENT_CHANGELOG` 的 `notes_zh`/`notes_en`（设置页双语更新记录，也是 GitHub Release note 的来源）→ `npm run tauri build` → 打 tag 推送 → 建 GitHub Release（note 不单独归档进仓库，流程与模板见 release.md）。

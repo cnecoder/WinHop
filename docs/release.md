@@ -32,7 +32,8 @@ const CURRENT_CHANGELOG: ChangelogEntry = ChangelogEntry {
 
 ### b. GitHub Release 正文
 
-归档于 `docs/release-vX.Y.Z.md`，**中英双语同一文件**：结构为 `## 中文` 段 + `## English` 段。
+同一份内容用于 GitHub Release。**中英双语**，结构为 `## 中文` 段 + `## English` 段。
+Release note 不单独提交进仓库（GitHub Releases 与应用内 `CURRENT_CHANGELOG` 已是两处记录）；写在临时文件里喂给 `gh`，或直接粘贴到网页。
 
 ## 3. Release note 规范
 
@@ -44,7 +45,25 @@ const CURRENT_CHANGELOG: ChangelogEntry = ChangelogEntry {
 - **中英文逐条对应**：同一条目中文第 N 条 = 英文第 N 条，顺序一致。
 - 不罗列内部重构（删死代码、依赖瘦身等）——这些进 commit message，不进用户 release note。
 
-模板见 `docs/release-v0.3.0.md`。
+模板（`X.Y.Z` 与条目按版本替换）：
+
+```markdown
+# WinHop vX.Y.Z
+
+## 中文
+
+**<一句话重点修复/特性>**
+
+- 🐛 <修复条目>
+- ✨ <新功能条目>
+
+## English
+
+**<one-line headline fix/feature>**
+
+- 🐛 <fix item, mirrors the Chinese item by order>
+- ✨ <feature item>
+```
 
 ## 4. 发布步骤
 
@@ -79,18 +98,19 @@ src-tauri/target/release/bundle/msi/WinHop_X.Y.Z_x64_en-US.msi    ← MSI
 `HTTPS_PROXY=http://127.0.0.1:10809`，端口按本机代理改）：
 
 ```bash
+# release note 写到临时文件（中英双语，结构见上模板），不进仓库
 gh release create vX.Y.Z \
   "src-tauri/target/release/bundle/nsis/WinHop_X.Y.Z_x64-setup.exe" \
   "src-tauri/target/release/bundle/msi/WinHop_X.Y.Z_x64_en-US.msi" \
   --title "WinHop vX.Y.Z" \
-  --notes-file docs/release-vX.Y.Z.md
+  --notes-file /tmp/notes.md
 ```
 
 **gh 认证不可用时（网络受限，如本机仅 SSH 能通）走网页**：
 
 1. 打开 `https://github.com/<owner>/<repo>/releases/new?tag=vX.Y.Z`（tag 已推，自动选中）
 2. Title 填 `WinHop vX.Y.Z`
-3. 正文粘贴 `docs/release-vX.Y.Z.md` 全文
+3. 正文粘贴双语 release note（按上面模板写）
 4. Attach binaries 拖入上面两个安装包
 5. 勾 "Set as the latest release" → Publish
 
