@@ -14,6 +14,14 @@ Rust + Tauri 2（WebView2）· Windows 10/11 x64
 
 </div>
 
+## 演示
+
+`t` 在 Terminal 的 2 个窗口与 `v` 在 VS Code 的 3 个窗口之间切换，以及空格快速切回上一个窗口：
+
+<div align="center">
+  <video src="assets/demo.mp4" controls loop width="720"></video>
+</div>
+
 ## 为什么用 WinHop
 
 - **纯键盘、两次按键到任意窗口**：`Ctrl+Space` 呼出，字母选程序、数字选窗口，手不离键盘

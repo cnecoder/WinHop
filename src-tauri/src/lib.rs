@@ -1,4 +1,3 @@
-mod capture;
 mod config;
 mod windows;
 
@@ -395,12 +394,33 @@ fn open(app: &AppHandle) {
         let _ = win.set_focus();
         if let Ok(hwnd) = win.hwnd() {
             windows::set_overlay_hwnd(hwnd.0 as isize);
+            // 夺焦校验：覆盖层必须拿到键盘焦点，否则按键仍进底层程序（用户看着
+            // 选择页打字打到后台）。失败即关闭，还原呼出前窗口。
+            if windows::foreground() != hwnd.0 as isize {
+                eprintln!(
+                    "[t={}] 覆盖层夺焦失败，关闭（前台被其它窗口锁定）",
+                    windows::now_ms()
+                );
+                drop(ov); // close 会锁 overlay，必须先释放
+                close(app);
+                return;
+            }
         }
     }
     emit(app, &inner, &ov);
 }
 
 fn close(app: &AppHandle) {
+    close_impl(app, true);
+}
+
+// 焦点丢失触发的关闭（Alt+Tab / Win 键离开覆盖层）：用户已主动切到别的窗口，
+// 不还原 prev_fg，否则会把用户刚选的目标窗口强夺回旧窗口
+fn close_no_restore(app: &AppHandle) {
+    close_impl(app, false);
+}
+
+fn close_impl(app: &AppHandle, restore_prev: bool) {
     let inner = app.state::<Inner>();
     if !inner.visible.load(Ordering::Relaxed) {
         eprintln!("[winhop] close 被跳过（已关闭）");
@@ -421,11 +441,12 @@ fn close(app: &AppHandle) {
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.hide();
     }
-    // 决定要激活的目标窗口（先记下来，spawn 放到 emit 之后）
+    // 决定要激活的目标窗口（先记下来，spawn 放到 emit 之后）。
+    // pending（用户明确选了窗口）总是优先；否则仅 restore_prev 路径回退 prev_fg
     let pending = inner.pending_activate.swap(0, Ordering::Relaxed);
     let target = if pending != 0 {
         pending
-    } else if !switched {
+    } else if restore_prev && !switched {
         inner.prev_fg.load(Ordering::Relaxed)
     } else {
         0
@@ -591,25 +612,6 @@ fn key(app: AppHandle, k: String) {
         _ => return,
     };
     handle_key(&app, msg);
-}
-
-// 窗口缩略图（win+tab 风格）：PrintWindow 捕获 → BMP base64。async 跑在工作线程，不阻塞主线程
-#[tauri::command]
-async fn window_thumbnail(hwnd: isize, max_w: u32, max_h: u32) -> Result<String, String> {
-    let bmp = windows::capture_window(hwnd, max_w, max_h).ok_or("窗口捕获失败")?;
-    eprintln!(
-        "[t={}] 缩略图 hwnd={:#x} bytes={}",
-        windows::now_ms(),
-        hwnd,
-        bmp.len()
-    );
-    // 诊断转储：设置 WINHOP_DUMP_THUMB=1 时把 BMP 落盘
-    if std::env::var("WINHOP_DUMP_THUMB").is_ok() {
-        let path = std::env::temp_dir().join(format!("wt_thumb_{:#x}.bmp", hwnd));
-        let _ = std::fs::write(&path, &bmp);
-        eprintln!("[t={}] 转储 {}", windows::now_ms(), path.display());
-    }
-    Ok(format!("data:image/bmp;base64,{}", windows::base64(&bmp)))
 }
 
 // DWM 缩略图注册/更新：大预览用 slot "pane"，行缩略图用 "row:<hwnd>"。
@@ -1100,8 +1102,10 @@ fn handle_key(app: &AppHandle, msg: HookMsg) {
             if ov.phase != Phase::Windows || ov.wins.is_empty() {
                 return;
             }
-            let multi = inner.cfg.lock().unwrap().multi_letter;
-            let preview_mode = inner.cfg.lock().unwrap().win_digit_mode == "preview";
+            let (multi, preview_mode) = {
+                let cfg = inner.cfg.lock().unwrap();
+                (cfg.multi_letter, cfg.win_digit_mode == "preview")
+            };
             let total = ov.wins.len();
             if !multi {
                 // 单字母模式：数字累积，n*10 > total（再加一位必超总数）立即跳转
@@ -1300,8 +1304,14 @@ pub fn run() {
         eprintln!("[winhop] 已有实例在运行，退出");
         return;
     }
-    let shortcut = Shortcut::from_str(&cfg.hotkey)
-        .unwrap_or_else(|e| panic!("配置热键「{}」无效: {}", cfg.hotkey, e));
+    // 配置热键无效时回退默认，不让 app 崩溃
+    let shortcut = Shortcut::from_str(&cfg.hotkey).unwrap_or_else(|e| {
+        eprintln!(
+            "配置热键「{}」无效: {}，回退默认 ctrl+space",
+            cfg.hotkey, e
+        );
+        Shortcut::from_str("ctrl+space").expect("默认热键无效")
+    });
     tauri::Builder::default()
         .plugin(
             // RegisterHotKey 系统级热键：Chromium 前台（raw input）时 LL 键盘钩子失效，
@@ -1324,7 +1334,6 @@ pub fn run() {
             get_settings,
             save_settings,
             quit_app,
-            window_thumbnail,
             thumb_set,
             thumb_clear,
             toggle_fullscreen,
@@ -1348,7 +1357,10 @@ pub fn run() {
             let handle = app.handle().clone();
             // 鼠标钩子（点击外部关闭）；键盘走 RegisterHotKey + webview JS keydown
             windows::install_mouse_hook(visible, Box::new(move |msg| handle_key(&handle, msg)));
-            app.global_shortcut().register(shortcut)?;
+            // 热键被其它程序占用时注册失败：不退出，托盘/鼠标钩子仍可用，只记日志
+            if let Err(e) = app.global_shortcut().register(shortcut) {
+                eprintln!("[winhop] 热键注册失败: {}（可用托盘图标唤出覆盖层）", e);
+            }
             // 健康看门狗：仅检测「隐形覆盖层」异常（visible=true 但窗口不可见）。
             // 不做空闲自动退出：配置面板打字不经过状态机，定时退出会打断用户操作。
             // 覆盖层只通过：热键 toggle / 选中窗口 / Esc / 点外部 关闭。
@@ -1425,7 +1437,7 @@ pub fn run() {
                 let keep = ov.last_activated != 0 && windows::foreground() == ov.last_activated;
                 drop(ov);
                 if !keep {
-                    close(app);
+                    close_no_restore(app);
                 }
             }
         })

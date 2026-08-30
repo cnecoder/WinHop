@@ -22,9 +22,6 @@ use windows_sys::Win32::System::Threading::{
     CreateMutexW, GetCurrentProcess, GetCurrentProcessId, GetCurrentThreadId, OpenProcess,
     OpenProcessToken, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
 };
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    VK_MENU, keybd_event, KEYEVENTF_KEYUP,
-};
 use windows_sys::Win32::UI::HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi};
 use windows_sys::Win32::Globalization::{
     GetUserDefaultLCID, GetUserDefaultLocaleName, GetUserDefaultUILanguage,
@@ -32,13 +29,14 @@ use windows_sys::Win32::Globalization::{
 };
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    BringWindowToTop, EnumWindows, GetClassNameW, GetClientRect, GetForegroundWindow,
+    BringWindowToTop, CallNextHookEx, EnumWindows, GetClassNameW, GetClientRect,
+    GetForegroundWindow,
     GetWindowPlacement, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, IsIconic,
     IsWindow, IsWindowVisible, MSLLHOOKSTRUCT, SetForegroundWindow, SetWindowsHookExW,
-    SetWindowPos, ShowWindow, SM_CYCAPTION, SM_CXPADDEDBORDER, SM_CXSIZEFRAME, SM_CYSIZEFRAME,
-    SW_RESTORE, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-    WINDOWPLACEMENT, WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_RBUTTONDOWN, WH_MOUSE_LL,
-    WPF_RESTORETOMAXIMIZED,
+    ShowWindow, SM_CYCAPTION, SM_CXPADDEDBORDER, SM_CXSIZEFRAME, SM_CYSIZEFRAME,
+    SPIF_SENDCHANGE, SPI_GETFOREGROUNDLOCKTIMEOUT, SPI_SETFOREGROUNDLOCKTIMEOUT,
+    SystemParametersInfoW, SW_RESTORE, WINDOWPLACEMENT, WM_LBUTTONDOWN, WM_MBUTTONDOWN,
+    WM_RBUTTONDOWN, WH_MOUSE_LL, WPF_RESTORETOMAXIMIZED,
 };
 
 #[derive(Clone)]
@@ -109,16 +107,21 @@ pub fn install_mouse_hook(visible: Arc<AtomicBool>, handler: Box<dyn Fn(HookMsg)
 }
 
 unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    // 不拦截的事件必须 CallNextHookEx 传给钩子链上的其它程序（AHK、鼠标手势等），
+    // 否则直接 return 会截断整条 LL 钩子链；仅「点击覆盖层外」才吞掉（return 1）
+    let pass = |code: i32, wparam: WPARAM, lparam: LPARAM| unsafe {
+        CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam)
+    };
     let ctx = match MOUSE_CTX.get() {
         Some(c) => c,
-        None => return 0,
+        None => return pass(code, wparam, lparam),
     };
     if code < 0 {
-        return 0;
+        return pass(code, wparam, lparam);
     }
     let wm = wparam as u32;
     if wm != WM_LBUTTONDOWN && wm != WM_RBUTTONDOWN && wm != WM_MBUTTONDOWN {
-        return 0;
+        return pass(code, wparam, lparam);
     }
     eprintln!(
         "[t={}] mouse {} thread={} vis={}",
@@ -128,7 +131,7 @@ unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) 
         ctx.visible.load(Ordering::Relaxed)
     );
     if !ctx.visible.load(Ordering::Relaxed) {
-        return 0;
+        return pass(code, wparam, lparam);
     }
     let ms = &*(lparam as *const MSLLHOOKSTRUCT);
     let hwnd = ctx.overlay_hwnd.load(Ordering::Relaxed);
@@ -145,11 +148,11 @@ unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) 
             if !inside {
                 eprintln!("[t={}] 鼠标点击外部，关闭", now_ms());
                 (ctx.handler)(HookMsg::ClickOutside);
-                return 1; // 吞掉点击，避免误操作原应用
+                return 1; // 吞掉点击，避免误操作原应用（不 CallNextHookEx）
             }
         }
     }
-    0
+    pass(code, wparam, lparam)
 }
 
 struct EnumCtx {
@@ -367,7 +370,12 @@ fn monitor_index(hwnd: HWND, monitors: &[Monitor]) -> u32 {
 
 // 激活目标窗口。不使用 AttachThreadInput——它会把调用线程输入队列与目标线程
 // 同步共享，目标线程处理慢时会把调用方（甚至前台线程）一起挂死，表现为光标卡顿、
-// 热键无响应。改用 Alt 注入破解前台锁（让系统认为有用户输入），再 SetForegroundWindow。
+// 热键无响应。
+// 也不注入按键（曾用 keybd_event Alt 按下/抬起破解前台锁）：注入的 down/up 若
+// 因焦点变化落到不同线程，会在受害应用线程的输入队列留下「卡住的 Alt」——之后
+// 该应用里所有按键都变成 Alt 组合（实测 12 次激活失败后前台应用键盘全乱）。
+// 改用临时关闭前台锁定超时（SPI_SETFOREGROUNDLOCKTIMEOUT=0）再 SetForegroundWindow，
+// 不产生任何按键事件，失败也无副作用。
 //
 // 注意：调用方须在独立线程执行本函数，且须在覆盖层 emit(visible=false) 收尾之后再启动
 // （见 close() 顺序说明）——若在 WebView2 处理 hide+IPC 期间从外部抢走焦点，会阻塞
@@ -381,12 +389,28 @@ pub fn activate(hwnd: isize) -> bool {
         if GetForegroundWindow() == h {
             return true;
         }
-        // Alt 按下→SetForegroundWindow→BringWindowToTop→Alt 抬起：利用「最近有输入」
-        // 破解前台锁定，顺序不可调换。
-        keybd_event(VK_MENU as u8, 0, 0, 0);
+        let mut timeout: u32 = 0;
+        SystemParametersInfoW(
+            SPI_GETFOREGROUNDLOCKTIMEOUT,
+            0,
+            &mut timeout as *mut u32 as *mut c_void,
+            0,
+        );
+        SystemParametersInfoW(
+            SPI_SETFOREGROUNDLOCKTIMEOUT,
+            0,
+            &0u32 as *const u32 as *mut c_void,
+            SPIF_SENDCHANGE,
+        );
         let ok = SetForegroundWindow(h);
         BringWindowToTop(h);
-        keybd_event(VK_MENU as u8, 0, KEYEVENTF_KEYUP, 0);
+        // 恢复原锁定超时
+        SystemParametersInfoW(
+            SPI_SETFOREGROUNDLOCKTIMEOUT,
+            0,
+            &timeout as *const u32 as *mut c_void,
+            SPIF_SENDCHANGE,
+        );
         let success = ok != 0 && GetForegroundWindow() == h;
         if !success {
             eprintln!(
@@ -713,22 +737,6 @@ pub fn thumb_clear() {
     }
 }
 
-// 促使 DWM 重新合成目标窗口：被遮挡且空闲的窗口可能迟迟不出 WGC 初始帧，
-// FRAMECHANGED 触发一次重新合成即可逼出
-pub fn nudge_compose(hwnd: isize) {
-    unsafe {
-        SetWindowPos(
-            hwnd as HWND,
-            std::ptr::null_mut(),
-            0,
-            0,
-            0,
-            0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
-        );
-    }
-}
-
 pub fn get_overlay_hwnd() -> isize {
     MOUSE_CTX
         .get()
@@ -738,152 +746,6 @@ pub fn get_overlay_hwnd() -> isize {
 
 pub fn foreground() -> isize {
     unsafe { GetForegroundWindow() as isize }
-}
-
-// PrintWindow 直捕窗口内容（每窗口独立、遮挡无关）→ StretchBlt 等比缩小 → 24bpp BMP。
-// 经实测验证：PrintWindow 与屏幕像素一致（平均差 <1）；
-// 之前「色彩反转/失真」为误诊——对照时屏幕位置显示的是另一覆盖窗口。
-// 24bpp 无 alpha 字节，消除 BMP 解码歧义（32bpp 的 alpha/方向问题曾导致显示异常）。
-// PrintWindow 并发调用有 GDI 竞态（实测：并行捕获多个窗口会返回错乱/屏幕内容），
-// 用全局锁串行化捕获
-static CAPTURE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-pub fn capture_window(hwnd: isize, max_w: u32, max_h: u32) -> Option<Vec<u8>> {
-    // WGC 优先：直捕 DWM 窗口纹理，与遮挡无关（PrintWindow 在窗口被全屏
-    // 选择页盖住时只能拿到标题栏一条）；失败回退 PrintWindow
-    if let Some(bmp) = crate::capture::snapshot_bmp(hwnd, max_w, max_h) {
-        return Some(bmp);
-    }
-    print_window_capture(hwnd, max_w, max_h)
-}
-
-fn print_window_capture(hwnd: isize, max_w: u32, max_h: u32) -> Option<Vec<u8>> {
-    let _guard = CAPTURE_LOCK.lock().ok()?;
-    unsafe {
-        use windows_sys::Win32::Graphics::Gdi::{
-            CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDIBits, GetDC,
-            ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER,
-        };
-        use windows_sys::Win32::Storage::Xps::PrintWindow;
-        use windows_sys::Win32::UI::WindowsAndMessaging::PW_RENDERFULLCONTENT;
-
-        let h = hwnd as HWND;
-        let mut rect = RECT {
-            left: 0,
-            top: 0,
-            right: 0,
-            bottom: 0,
-        };
-        if GetWindowRect(h, &mut rect) == 0 {
-            return None;
-        }
-        let w = rect.right - rect.left;
-        let hh = rect.bottom - rect.top;
-        if w <= 0 || hh <= 0 {
-            return None;
-        }
-        let scale = ((max_w as f64) / w as f64)
-            .min((max_h as f64) / hh as f64)
-            .min(1.0);
-        let tw = (w as f64 * scale).max(1.0) as i32;
-        let th = (hh as f64 * scale).max(1.0) as i32;
-
-        let screen = GetDC(std::ptr::null_mut());
-        let mem = CreateCompatibleDC(screen);
-        let bmp = CreateCompatibleBitmap(screen, w, hh);
-        ReleaseDC(std::ptr::null_mut(), screen);
-        if mem.is_null() || bmp.is_null() {
-            return None;
-        }
-        let _old = SelectObject(mem, bmp);
-        PrintWindow(h, mem, PW_RENDERFULLCONTENT);
-
-        // 全尺寸 24bpp 读取。注意：不能 BitBlt/StretchBlt 拷贝 PrintWindow 的 DC——
-        // DWM 合成内容不在 GDI 表面，拷贝得到黑图（实测）；GetDIBits 走 DWM 快照可正常读取
-        let row_size = ((w * 3 + 3) / 4) * 4;
-        let mut bi = BITMAPINFO {
-            bmiHeader: BITMAPINFOHEADER {
-                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-                biWidth: w,
-                biHeight: hh,
-                biPlanes: 1,
-                biBitCount: 24,
-                biCompression: 0,
-                biSizeImage: 0,
-                biXPelsPerMeter: 0,
-                biYPelsPerMeter: 0,
-                biClrUsed: 0,
-                biClrImportant: 0,
-            },
-            bmiColors: std::mem::zeroed(),
-        };
-        let mut bits = vec![0u8; (row_size * hh) as usize];
-        GetDIBits(
-            mem,
-            bmp,
-            0,
-            hh as u32,
-            bits.as_mut_ptr() as *mut c_void,
-            &mut bi,
-            0,
-        );
-        DeleteObject(bmp);
-        DeleteDC(mem);
-
-        // Rust 侧最近邻缩放到 tw×th
-        let trow = ((tw * 3 + 3) / 4) * 4;
-        let mut out = vec![0u8; (trow * th) as usize];
-        for y in 0..th as usize {
-            let sy = (((y as f64 + 0.5) * hh as f64 / th as f64) as usize).min(hh as usize - 1);
-            let srow = sy * row_size as usize;
-            for x in 0..tw as usize {
-                let sx = (((x as f64 + 0.5) * w as f64 / tw as f64) as usize).min(w as usize - 1);
-                let si = srow + sx * 3;
-                let di = y * trow as usize + x * 3;
-                out[di..di + 3].copy_from_slice(&bits[si..si + 3]);
-            }
-        }
-
-        // 组装 24bpp BMP
-        let file_size = 54u32 + trow as u32 * th as u32;
-        let mut data = Vec::with_capacity(file_size as usize);
-        data.extend_from_slice(b"BM");
-        data.extend_from_slice(&file_size.to_le_bytes());
-        data.extend_from_slice(&0u32.to_le_bytes());
-        data.extend_from_slice(&54u32.to_le_bytes());
-        data.extend_from_slice(&40u32.to_le_bytes());
-        data.extend_from_slice(&(tw as i32).to_le_bytes());
-        data.extend_from_slice(&(th as i32).to_le_bytes());
-        data.extend_from_slice(&1u16.to_le_bytes());
-        data.extend_from_slice(&24u16.to_le_bytes());
-        data.extend_from_slice(&0u32.to_le_bytes());
-        data.extend_from_slice(&(trow as u32 * th as u32).to_le_bytes());
-        data.extend_from_slice(&0i32.to_le_bytes());
-        data.extend_from_slice(&0i32.to_le_bytes());
-        data.extend_from_slice(&0u32.to_le_bytes());
-        data.extend_from_slice(&0u32.to_le_bytes());
-        data.extend_from_slice(&out);
-        Some(data)
-    }
-}
-
-pub fn base64(data: &[u8]) -> String {
-    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(data.len() / 3 * 4 + 4);
-    for chunk in data.chunks(3) {
-        let b0 = chunk[0];
-        let b1 = *chunk.get(1).unwrap_or(&0);
-        let b2 = *chunk.get(2).unwrap_or(&0);
-        out.push(T[(b0 >> 2) as usize] as char);
-        out.push(T[(((b0 & 3) << 4) | (b1 >> 4)) as usize] as char);
-        out.push(if chunk.len() > 1 {
-            T[(((b1 & 15) << 2) | (b2 >> 6)) as usize] as char
-        } else {
-            '='
-        });
-        out.push(if chunk.len() > 2 { T[(b2 & 63) as usize] as char } else { '=' });
-    }
-    out
 }
 
 // 检测系统语言：返回界面语言 id（"zh-CN" / "en"），默认中文。
@@ -932,6 +794,14 @@ pub fn redirect_stderr_to_file() {
         let dir = dir.join("WinHop");
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join("winhop.log");
+        // 日志轮转：超过 1MB 时把旧日志改名为 winhop.log.1（覆盖旧备份），本次启动重开新日志
+        const MAX_LOG: u64 = 1024 * 1024;
+        if let Ok(md) = std::fs::metadata(&path) {
+            if md.len() > MAX_LOG {
+                let _ = std::fs::remove_file(dir.join("winhop.log.1"));
+                let _ = std::fs::rename(&path, dir.join("winhop.log.1"));
+            }
+        }
         let wide = to_wide(path.to_str().unwrap_or("winhop.log"));
         let file = CreateFileW(
             wide.as_ptr(),

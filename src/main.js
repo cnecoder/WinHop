@@ -307,10 +307,13 @@ window.addEventListener("keydown", (e) => {
   else if (e.key === "Backspace") k = "back";
   else if (e.key === " " || e.code === "Space") k = "space";
   else if (e.key === "Enter") k = "enter";
-  else if (e.ctrlKey && e.code === "Space") k = "hotkey";
   else if (/^[a-zA-Z]$/.test(e.key)) k = "letter:" + e.key.toLowerCase();
   else if (/^[0-9]$/.test(e.key)) k = "digit:" + e.key;
-  if (k) invoke("key", { k });
+  if (k) {
+    // 按住不放的重复按键：字母/数字会重复路由（多字母串累积、窗口轮询连转），忽略
+    if (e.repeat && (k.startsWith("letter:") || k.startsWith("digit:"))) return;
+    invoke("key", { k });
+  }
 });
 
 document.getElementById("settings-btn").addEventListener("click", () => {

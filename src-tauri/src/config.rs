@@ -282,7 +282,10 @@ pub fn load() -> (Config, std::path::PathBuf) {
 pub fn save(cfg: &Config, path: &std::path::Path) -> std::io::Result<()> {
     let text = serde_json::to_string_pretty(cfg)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-    std::fs::write(path, text)
+    // 原子写：先写临时文件再 rename，避免崩溃/断电时写坏 config.json 导致下次启动 panic
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, text)?;
+    std::fs::rename(&tmp, path)
 }
 
 // 预置常用软件别名：key 为单字母模式代号，multi_key 为多字母模式代号，process 为小写 exe 名。

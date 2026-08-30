@@ -4255,7 +4255,6 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-global-shortcut",
- "windows",
  "windows-sys 0.59.0",
 ]
 
