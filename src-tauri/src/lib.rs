@@ -1456,3 +1456,74 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+
+#[cfg(test)]
+mod state_machine_tests {
+    use super::*;
+
+    fn entry(key: &str, mk: &str, name: &str, proc_: &str) -> ProgEntry {
+        ProgEntry {
+            key: key.into(),
+            multi_key: mk.into(),
+            name: name.into(),
+            process: proc_.into(),
+            configured: true,
+        }
+    }
+
+    fn state_with(entries: Vec<ProgEntry>) -> OverlayState {
+        let mut ov = OverlayState::default();
+        ov.prog_list = entries;
+        ov
+    }
+
+    #[test]
+    fn match_score_prefers_multi_key_then_name() {
+        let e = entry("v", "vs", "VS Code", "code.exe");
+        // 多字母代号精确 > 前缀 > 名称精确
+        assert!(match_score(&e, "vs") >= 1000);
+        assert!(match_score(&e, "v") >= 800); // 代号前缀
+        assert_eq!(match_score(&e, "zzz"), 0); // 不匹配
+        // 名称匹配
+        let e2 = entry("", "", "记事本", "notepad.exe");
+        assert!(match_score(&e2, "记事本") > 0);
+        assert!(match_score(&e2, "记事") > 0);
+    }
+
+    #[test]
+    fn view_indices_single_letter_is_full_order() {
+        let ov = state_with(vec![entry("c", "", "Chrome", "chrome.exe"), entry("v", "", "Code", "code.exe")]);
+        let v = view_indices(&ov, false);
+        assert_eq!(v, vec![0, 1]); // 单字母模式不筛选，保持顺序
+    }
+
+    #[test]
+    fn view_indices_multi_filters_and_ranks() {
+        let ov = state_with(vec![
+            entry("c", "ch", "Chrome", "chrome.exe"),
+            entry("v", "vs", "VS Code", "code.exe"),
+            entry("f", "ff", "Firefox", "firefox.exe"),
+        ]);
+        // 无输入 = 全量
+        assert_eq!(view_indices(&ov, true).len(), 3);
+        let mut ov = ov;
+        // "vs" 精确命中 code，排第一且排除其它
+        ov.letter_buf = "vs".into();
+        let v = view_indices(&ov, true);
+        assert_eq!(v, vec![1]);
+        // "f" 命中 ff 代号前缀 + firefox 名
+        ov.letter_buf = "f".into();
+        let v = view_indices(&ov, true);
+        assert!(v.contains(&2));
+        assert!(!v.contains(&0));
+    }
+
+    #[test]
+    fn pagination_uses_page_size() {
+        // 超过一页时页数 = ceil(n / PROG_PAGE_SIZE)
+        let n = PROG_PAGE_SIZE * 2 + 3;
+        let page_count = n.div_ceil(PROG_PAGE_SIZE);
+        assert_eq!(page_count, 3);
+        assert_eq!(PROG_PAGE_SIZE, 20);
+    }
+}

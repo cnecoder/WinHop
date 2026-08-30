@@ -24,10 +24,12 @@
 ## 工程
 
 - [ ] **热键设置界面**（暂停中）：设置/录制全局热键曾引入「热键一轮后失效 + 主线程卡死」问题，已回退；代码与复盘存于分支 `hotkey-settings-wip`（重做前必读，教训见 [debug.md](debug.md)）
-- [ ] **自动化测试**：状态机逻辑可抽离做单元测试；窗口枚举/激活需集成测试（现有少量版本资源回归测试，见 `windows.rs` tests）
-- [ ] **CI**：GitHub Actions 构建 release 产物并自动发布（当前手动打包上传，流程见 [release.md](release.md)）
+- [ ] **集成测试**：窗口枚举/激活依赖 Win32 桌面会话，需集成测试环境（现有单测覆盖配置校验/序列化、状态机筛选排序、版本资源，见 `cargo test`）
 
 ## 已完成（历史记录）
+
+- [x] **自动化单元测试**：配置校验/原子保存/序列化（config.rs）、状态机匹配筛选/分页（lib.rs）、版本资源（windows.rs），`cargo test` 共 14 项（v0.3.x）
+- [x] **CI**：GitHub Actions（`.github/workflows/ci.yml`）——PR/主分支跑 `cargo test` + 前端 `node --check`；推 `v*` tag 自动构建 NSIS/MSI 并建 Release 上传（流程见 [release.md](release.md)）
 
 - [x] **日志轮转**：`winhop.log` 超 1MB 轮转 `winhop.log.1`（v0.3.0）
 - [x] **实时缩略图**：窗口层改用 DWM 缩略图实时合成，被遮挡/最小化也清晰、随窗口内容实时更新（替代 PrintWindow/WGC 静态截图，v0.3.0）

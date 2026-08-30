@@ -94,7 +94,21 @@ src-tauri/target/release/bundle/msi/WinHop_X.Y.Z_x64_en-US.msi    ← MSI
 
 ## 5. 创建 GitHub Release
 
-**首选 `gh` CLI**（需 `gh auth login`；若 api.github.com 走代理，命令前加
+### 方式 A：CI 自动发布（推荐）
+
+推 `vX.Y.Z` tag 即触发 GitHub Actions（`.github/workflows/ci.yml`）：先跑测试，
+再 `npm run tauri build`，自动建 Release 并上传 NSIS/MSI（note 用 `--generate-notes`
+从 commit 自动生成）。双语 note 发布后在 Release 页编辑补上（或手动粘贴按第 3 节模板写的内容）。
+
+```bash
+git tag -a vX.Y.Z -m "WinHop vX.Y.Z"
+git push origin vX.Y.Z
+# 到 Actions 页看构建；完成后 Release 自动出现
+```
+
+### 方式 B：本机手动
+
+**`gh` CLI**（需 `gh auth login`；若 api.github.com 走代理，命令前加
 `HTTPS_PROXY=http://127.0.0.1:10809`，端口按本机代理改）：
 
 ```bash

@@ -371,3 +371,129 @@ fn validate(cfg: &mut Config) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn prog(key: &str, mk: &str, name: &str, proc_: &str) -> Program {
+        Program {
+            key: key.into(),
+            multi_key: mk.into(),
+            name: name.into(),
+            process: proc_.into(),
+        }
+    }
+
+    fn minimal_cfg() -> Config {
+        Config {
+            hotkey: "ctrl+space".into(),
+            elevate: true,
+            window_order: "zorder".into(),
+            multi_letter: false,
+            theme: "black-green".into(),
+            win_digit_mode: "jump".into(),
+            lang: String::new(),
+            programs: vec![],
+            blocked: vec![],
+            blocked_seeded: true,
+        }
+    }
+
+    #[test]
+    fn valid_config_passes() {
+        let mut cfg = minimal_cfg();
+        cfg.programs = vec![
+            prog("c", "ch", "Chrome", "chrome.exe"),
+            prog("v", "vs", "Code", "code.exe"),
+        ];
+        validate(&mut cfg); // 不应 panic
+    }
+
+    #[test]
+    fn invalid_enums_fall_back() {
+        let mut cfg = minimal_cfg();
+        cfg.window_order = "bogus".into();
+        cfg.theme = "no-such-theme".into();
+        cfg.win_digit_mode = "bogus".into();
+        cfg.lang = "fr".into();
+        validate(&mut cfg);
+        assert_eq!(cfg.window_order, "zorder");
+        assert_eq!(cfg.theme, THEMES[0]);
+        assert_eq!(cfg.win_digit_mode, "jump");
+        assert_eq!(cfg.lang, "");
+    }
+
+    #[test]
+    fn empty_and_duplicate_keys_panic() {
+        // 空 key 允许（仅多字母程序）；重复单字母 panic
+        let mut cfg = minimal_cfg();
+        cfg.programs = vec![prog("", "ch", "A", "a.exe")];
+        validate(&mut cfg); // 空 key 合法
+
+        cfg.programs = vec![prog("c", "", "A", "a.exe"), prog("c", "", "B", "b.exe")];
+        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| validate(&mut cfg))).is_err());
+    }
+
+    #[test]
+    fn invalid_single_key_panics() {
+        let mut cfg = minimal_cfg();
+        cfg.programs = vec![prog("cd", "", "A", "a.exe")]; // 单字母模式代号多字符
+        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| validate(&mut cfg))).is_err());
+
+        cfg.programs = vec![prog("C", "", "A", "a.exe")]; // 大写
+        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| validate(&mut cfg))).is_err());
+    }
+
+    #[test]
+    fn duplicate_or_invalid_multi_key_panics() {
+        let mut cfg = minimal_cfg();
+        cfg.programs = vec![prog("", "ch", "A", "a.exe"), prog("", "ch", "B", "b.exe")];
+        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| validate(&mut cfg))).is_err());
+
+        cfg.programs = vec![prog("", "CH", "A", "a.exe")]; // 大写
+        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| validate(&mut cfg))).is_err());
+    }
+
+    #[test]
+    fn save_is_atomic_and_roundtrips() {
+        let dir = std::env::temp_dir().join(format!("winhop_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.json");
+        let mut cfg = minimal_cfg();
+        cfg.programs = vec![prog("c", "ch", "Chrome", "chrome.exe")];
+        save(&cfg, &path).unwrap();
+        // 原子写：目标存在、临时文件不残留
+        assert!(path.exists());
+        assert!(!dir.join("config.json.tmp").exists());
+        let text = std::fs::read_to_string(&path).unwrap();
+        let back: Config = serde_json::from_str(&text).unwrap();
+        assert_eq!(back.programs.len(), 1);
+        assert_eq!(back.programs[0].process, "chrome.exe");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn default_programs_present() {
+        assert!(!default_programs().is_empty());
+        // 默认代号单字母唯一
+        let mut seen = std::collections::HashSet::new();
+        for p in default_programs() {
+            assert!(seen.insert(p.key.clone()), "默认单字母代号重复 {}", p.key);
+        }
+    }
+
+    #[test]
+    fn blocked_untagged_deserializes_both_forms() {
+        let c: Config = serde_json::from_str(
+            r#"{"hotkey":"ctrl+space","programs":[],
+                "blocked":["a.exe",{"process":"b.exe","note":"x"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(c.blocked.len(), 2);
+        assert_eq!(c.blocked[0].process(), "a.exe");
+        assert_eq!(c.blocked[0].note(), "");
+        assert_eq!(c.blocked[1].process(), "b.exe");
+        assert_eq!(c.blocked[1].note(), "x");
+    }
+}
