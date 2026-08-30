@@ -14,6 +14,9 @@ pub struct Config {
     /// 多字母模式窗口层数字键行为："jump" 按数字直接跳转（默认）；"preview" 先聚焦预览、Enter 跳转
     #[serde(default = "default_win_digit_mode")]
     pub win_digit_mode: String,
+    /// 界面语言："zh-CN"/"en"，空串为跟随系统（默认）
+    #[serde(default)]
+    pub lang: String,
     pub programs: Vec<Program>,
     /// 黑名单：命中的程序不进入列表。
     /// 首次/老配置播种 system-blocklist.txt 的系统默认项，之后完全由用户控制（设置页可解除）。
@@ -253,6 +256,7 @@ pub fn load() -> (Config, std::path::PathBuf) {
         multi_letter: false,
         theme: default_theme(),
         win_digit_mode: default_win_digit_mode(),
+        lang: String::new(),
         programs: default_programs(),
         blocked: default_blocked(),
         blocked_seeded: true,
@@ -335,6 +339,11 @@ fn validate(cfg: &mut Config) {
             cfg.win_digit_mode
         );
         cfg.win_digit_mode = "jump".into();
+    }
+    // lang：空（跟随系统）/ zh-CN / en，其余归一化为空
+    if cfg.lang != "" && cfg.lang != "zh-CN" && cfg.lang != "en" {
+        eprintln!("[winhop] 配置 lang 无效「{}」，回退为跟随系统", cfg.lang);
+        cfg.lang = String::new();
     }
     let mut seen_key = std::collections::HashSet::new();
     let mut seen_mk = std::collections::HashSet::new();

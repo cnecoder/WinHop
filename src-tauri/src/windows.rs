@@ -26,6 +26,10 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     VK_MENU, keybd_event, KEYEVENTF_KEYUP,
 };
 use windows_sys::Win32::UI::HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi};
+use windows_sys::Win32::Globalization::{
+    GetUserDefaultLCID, GetUserDefaultLocaleName, GetUserDefaultUILanguage,
+    GetSystemDefaultUILanguage,
+};
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     BringWindowToTop, EnumWindows, GetClassNameW, GetClientRect, GetForegroundWindow,
@@ -880,6 +884,39 @@ pub fn base64(data: &[u8]) -> String {
         out.push(if chunk.len() > 2 { T[(b2 & 63) as usize] as char } else { '=' });
     }
     out
+}
+
+// 检测系统语言：返回界面语言 id（"zh-CN" / "en"），默认中文。
+// 以系统 UI 语言的 LANGID 主语言为准（Windows 显示语言），用户区域设置可不同于 UI 语言。
+// 主语言 ID 0x04 = LANG_CHINESE 归中文；LocaleName 前缀 zh 兜底；其余英文。
+pub fn system_lang() -> &'static str {
+    unsafe {
+        // 1) UI 语言：用户 UI 语言 > 系统 UI 语言
+        let mut langid = GetUserDefaultUILanguage();
+        if langid == 0 {
+            langid = GetSystemDefaultUILanguage();
+        }
+        // PRIMARYLANGID(lgid) = lgid & 0x3ff（0x0804 zh-CN → 0x04 = LANG_CHINESE）
+        if langid & 0x3ff == 0x04 {
+            return "zh-CN";
+        }
+        // 2) 兜底：用户区域设置名
+        let mut buf = [0u16; 32];
+        if GetUserDefaultLocaleName(buf.as_mut_ptr(), buf.len() as i32) > 0 {
+            let s = String::from_utf16_lossy(
+                &buf[..buf.iter().position(|&c| c == 0).unwrap_or(buf.len())],
+            );
+            if s.to_lowercase().starts_with("zh") {
+                return "zh-CN";
+            }
+        }
+        // 3) LCID 兜底（上述 API 均失败时）
+        let lcid = GetUserDefaultLCID();
+        if lcid & 0x3ff == 0x04 {
+            return "zh-CN";
+        }
+        "en"
+    }
 }
 
 // taskmgr 等管理员程序受 UIPI 保护：非提权进程的钩子吞键被无视、SetForegroundWindow 被拒。

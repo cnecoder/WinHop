@@ -1,3 +1,5 @@
+import { setLang, t, isEn, applyStaticI18n } from "./i18n.js";
+
 const { listen } = window.__TAURI__.event;
 const { invoke } = window.__TAURI__.core;
 
@@ -12,6 +14,22 @@ let settingsOpen = false;
 let state = null;
 let settingsLoaded = null; // 已保存的设置快照，用于判断是否改动
 let blockedState = null; // 设置页黑名单本地暂存（解除不立即生效，保存后统一写入）
+let langOverride = null; // 语言手动覆盖（null=跟随系统），保存后持久化
+let langChoice = "system"; // 设置页语言单选当前值（system/zh-CN/en）
+let sysLang = "zh-CN"; // 后端检测到的系统语言
+
+// 应用语言到 UI（不重开设置页，避免与关闭时序竞态）：
+// choice 为 system/zh-CN/en；setLang + 静态文案 + 覆盖层重绘（settingsOpen 时 render 会被挡，调用方保证顺序）
+function applyLanguage(choice) {
+  langChoice = choice;
+  langOverride = choice === "system" ? null : choice;
+  setLang(langOverride || sysLang);
+  document.documentElement.lang = isEn() ? "en" : "zh-CN";
+  applyStaticI18n();
+  if (typeof state === "object" && state) {
+    render(state); // 覆盖层动态文案（settingsOpen=true 时 render 内部早退，需先关设置页）
+  }
+}
 
 function escapeHtml(s) {
   return s.replace(
@@ -37,6 +55,7 @@ function readSettingsForm() {
     multi_letter: (mode ? mode.value : "single") === "multi",
     theme: theme ? theme.value : "black-green",
     win_digit_mode: wdm ? wdm.value : "jump",
+    lang: langChoice, // system 或具体语言
     blocked: (blockedState || []).map((b) => b.process),
   };
 }
@@ -52,6 +71,7 @@ function settingsDirty() {
     cur.multi_letter !== settingsLoaded.multi_letter ||
     cur.theme !== settingsLoaded.theme ||
     cur.win_digit_mode !== settingsLoaded.win_digit_mode ||
+    cur.lang !== settingsLoaded.lang ||
     curBlocked !== savedBlocked
   );
 }
@@ -62,7 +82,7 @@ function updateSettingsState() {
   const saveBtn = document.getElementById("settings-save");
   saveBtn.disabled = !dirty;
   document.getElementById("settings-status").textContent = dirty
-    ? "有未保存的修改"
+    ? t("setUnsaved")
     : "";
 }
 
@@ -74,6 +94,8 @@ async function openSettings() {
     multi_letter: info.multi_letter,
     theme: info.theme,
     win_digit_mode: info.win_digit_mode || "jump",
+    // 保存的语言选择：跟随系统=system，否则具体语言
+    lang: info.lang_cfg || "system",
     blocked: (info.blocked || []).map((b) => b.process).sort(),
   };
   document.querySelectorAll('input[name="order"]').forEach((r) => {
@@ -90,6 +112,22 @@ async function openSettings() {
   syncMultiOpts();
   document.querySelectorAll('input[name="win-digit-mode"]').forEach((r) => {
     r.checked = r.value === (info.win_digit_mode || "jump");
+  });
+  // 语言单选项：system（跟随系统）/ zh-CN / en。点选只暂存，保存后生效。
+  // "跟随系统"标签显示系统实际检测语言（lang_sys，与用户设置无关）
+  sysLang = info.lang_sys || "zh-CN";
+  const langBox = document.getElementById("lang-options");
+  const langCur = langChoice; // 当前选择（system/zh-CN/en），由保存的设置决定
+  const sysName = sysLang === "en" ? "English" : "简体中文";
+  langBox.innerHTML =
+    `<label class="setting-row"><input type="radio" name="lang" value="system"${langCur === "system" ? " checked" : ""} /><span>${escapeHtml(t("langSystem", { lang: sysName }))}</span></label>` +
+    `<label class="setting-row"><input type="radio" name="lang" value="zh-CN"${langCur === "zh-CN" ? " checked" : ""} /><span>${escapeHtml(t("langZh"))}</span></label>` +
+    `<label class="setting-row"><input type="radio" name="lang" value="en"${langCur === "en" ? " checked" : ""} /><span>${escapeHtml(t("langEn"))}</span></label>`;
+  langBox.querySelectorAll('input[name="lang"]').forEach((r) => {
+    r.addEventListener("change", () => {
+      langChoice = r.value; // 仅暂存，保存后 apply（见 saveSettingsAndClose）
+      updateSettingsState();
+    });
   });
   // 主题单选项由后端主题表动态生成
   const themeBox = document.getElementById("theme-options");
@@ -112,7 +150,7 @@ async function openSettings() {
   });
   applyTheme(info.theme);
   renderBlocked(info.blocked || []);
-  document.getElementById("version-info").textContent = "版本 " + info.version;
+  document.getElementById("version-info").textContent = t("version", { v: info.version });
   const e = info.changelog;
   document.getElementById("changelog").innerHTML =
     `<div class="changelog-entry">
@@ -141,7 +179,7 @@ function renderBlockedUi() {
   const box = document.getElementById("blocked-list");
   const blocked = blockedState || [];
   if (!blocked.length) {
-    box.innerHTML = `<span class="blocked-empty">无；在程序行 ✎ 编辑面板点「屏蔽」可添加</span>`;
+    box.innerHTML = `<span class="blocked-empty">${t("blockedEmpty")}</span>`;
     updateSettingsState();
     return;
   }
@@ -162,7 +200,7 @@ function renderBlockedUi() {
     }
     const btn = document.createElement("button");
     btn.className = "blocked-unblock";
-    btn.textContent = "解除";
+    btn.textContent = t("unblock");
     btn.addEventListener("click", () => {
       // 仅本地移除，保存后才真正生效
       blockedState = blockedState.filter((b) => b.process !== item.process);
@@ -196,16 +234,17 @@ async function saveSettingsAndClose() {
   await invoke("save_settings", { input });
   settingsLoaded = input;
   updateSettingsState();
-  closeSettings();
-  // 保存后重新枚举并刷新列表（模式切换、黑名单解除等立即生效）
+  closeSettings(); // 先关设置页，再应用语言 → 覆盖层 render 不被 settingsOpen 早退挡住
+  applyLanguage(langChoice);
+  // 保存后重新枚举并刷新列表（模式切换/黑名单解除/语言切换立即生效）
   invoke("refresh_overlay");
 }
 
 // 窗口层标题：多字母 + preview 模式提示数字聚焦/组合；其它模式只显示程序名
 function winHint(s) {
   if (!s.multi_letter || s.win_digit_mode !== "preview") return s.title;
-  if (s.win_digit) return `${s.title} · 已输入 ${s.win_digit}（Enter 跳转，Backspace 删除）`;
-  return `${s.title} · 输入数字聚焦窗口，Enter 跳转`;
+  if (s.win_digit) return t("winTyped", { title: s.title, n: s.win_digit });
+  return t("winEnter", { title: s.title });
 }
 
 function renderHeader(s) {
@@ -224,15 +263,15 @@ function renderHeader(s) {
   if (sep) sep.style.display = "";
   if (s.multi_letter) {
     badge.className = "mode-badge mode-multi";
-    badge.textContent = "多字母";
+    badge.textContent = t("badgeMulti");
   } else {
     badge.className = "mode-badge mode-single";
-    badge.textContent = "单字母";
+    badge.textContent = t("badgeSingle");
   }
   legend.innerHTML =
-    `<span class="legend-item"><span class="key key-cfg demo"></span>已配置·运行</span>` +
-    `<span class="legend-item"><span class="key key-auto demo"></span>动态检测</span>` +
-    `<span class="legend-item"><span class="key key-off demo"></span>已配置·未运行</span>`;
+    `<span class="legend-item"><span class="key key-cfg demo"></span>${t("legendCfg")}</span>` +
+    `<span class="legend-item"><span class="key key-auto demo"></span>${t("legendAuto")}</span>` +
+    `<span class="legend-item"><span class="key key-off demo"></span>${t("legendOff")}</span>`;
 }
 
 // 覆盖层夺焦后按键落在本 webview 内部（raw input 内部可达），路由给 Rust 状态机。
@@ -344,27 +383,29 @@ function startEditProgram(btn) {
   keyInput.className = "key-input";
   if (multi) {
     // 多字母模式：1+ 字母，不限长度
-    keyInput.placeholder = "多字母代号";
+    keyInput.placeholder = isEn() ? "multi-letter code" : "多字母代号";
     keyInput.value = prog.multi_key || "";
   } else {
     keyInput.maxLength = 1;
-    keyInput.placeholder = "字母";
+    keyInput.placeholder = isEn() ? "letter" : "字母";
     keyInput.value = prog.key || "";
   }
 
   const nameInput = document.createElement("input");
   nameInput.className = "name-input";
-  nameInput.placeholder = "名称";
+  nameInput.placeholder = isEn() ? "Name" : "名称";
   nameInput.value = prog.name || "";
 
   const confirmBtn = document.createElement("button");
   confirmBtn.className = "confirm-btn";
-  confirmBtn.textContent = "保存";
+  confirmBtn.textContent = t("setSave");
 
   const blockBtn = document.createElement("button");
   blockBtn.className = "block-btn";
-  blockBtn.textContent = "屏蔽";
-  blockBtn.title = "从此列表中隐藏该程序（设置页可解除）";
+  blockBtn.textContent = isEn() ? "Block" : "屏蔽";
+  blockBtn.title = isEn()
+    ? "Hide this program from the list (unblock in settings)"
+    : "从此列表中隐藏该程序（设置页可解除）";
   blockBtn.addEventListener("click", (e) => {
     e.stopPropagation();
     invoke("block_program", { process: prog.process, note: nameInput.value.trim() || prog.name || "" })
@@ -383,7 +424,7 @@ function startEditProgram(btn) {
       .filter((c) => !used.has(c) || c === prog.key);
     hint = document.createElement("span");
     hint.className = "free-hint";
-    hint.appendChild(document.createTextNode("可用字母: "));
+    hint.appendChild(document.createTextNode(isEn() ? "Free letters: " : "可用字母: "));
     for (const c of free) {
       const b = document.createElement("b");
       b.textContent = c;
@@ -398,7 +439,9 @@ function startEditProgram(btn) {
   } else {
     hint = document.createElement("span");
     hint.className = "free-hint";
-    hint.textContent = "多字母代号（如 ch、vs），匹配时优先于软件名；留空则只按名称匹配";
+    hint.textContent = isEn()
+      ? "Multi-letter code (e.g. ch, vs); matched before the name. Leave empty to match by name only."
+      : "多字母代号（如 ch、vs），匹配时优先于软件名；留空则只按名称匹配";
   }
 
   const save = () => {
@@ -602,7 +645,7 @@ function render(s) {
               `<div class="wtop">` +
               `<span class="key">${w.index}</span>` +
               `<span class="name">${escapeHtml(w.title)}</span>` +
-              `<span class="screen">屏${w.screen + 1}</span>` +
+              `<span class="screen">${t("screen", { n: w.screen + 1 })}</span>` +
               `</div>` +
               `<img class="wthumb" alt="" />` +
               `</div>`
@@ -624,18 +667,18 @@ function render(s) {
     // 工具条：左侧筛选（多字母模式），右侧分页/翻页提示，同一行两端对齐
     const filterLeft = s.multi_letter
       ? `<div class="filter-bar">
-           <span class="filter-label">筛选</span>
+           <span class="filter-label">${t("filterLabel")}</span>
            <span class="filter-box${s.filter ? " active" : ""}">${escapeHtml(s.filter)}<span class="caret">▏</span></span>
-           <span class="filter-hint">Enter 确认，Esc 清除，Backspace 删除</span>
+           <span class="filter-hint">${t("filterHint")}</span>
          </div>`
       : `<span></span>`;
     const pageRight = noMatch
       ? ""
       : s.page_count > 1
-        ? `第 ${s.page} / ${s.page_count} 页 · PageUp/PageDown 翻页`
-        : `PageUp/PageDown 翻页`;
+        ? t("pageOf", { a: s.page, b: s.page_count })
+        : t("pager");
     const emptyHint = noMatch
-      ? `<div class="empty-hint"><span class="key key-empty">·</span><span>无匹配「${escapeHtml(s.filter)}」，Esc 清除筛选</span></div>`
+      ? `<div class="empty-hint"><span class="key key-empty">·</span><span>${t("noMatch", { q: escapeHtml(s.filter) })}</span></div>`
       : "";
     listEl.innerHTML =
       `<div class="toolbar">${filterLeft}<span class="pager">${pageRight}</span></div>` +
@@ -656,8 +699,8 @@ function render(s) {
               `<div class="row${p.active ? " active" : ""}${p.running ? "" : " off"}" data-key="${escapeHtml(p.key)}" data-process="${escapeHtml(p.process)}">` +
               `<span class="key-slot"><span class="${keyCls}${wide}">${hasKey ? escapeHtml(p.key) : "·"}</span></span>` +
               `<span class="name">${escapeHtml(p.name)} (${escapeHtml(p.process)})</span>` +
-              `<span class="screen">${p.running ? "×" + p.count : "未运行"}</span>` +
-              `<button class="edit-btn" title="编辑">✎</button>` +
+              `<span class="screen">${p.running ? "×" + p.count : t("notRunning")}</span>` +
+              `<button class="edit-btn" title="${t("edit")}">✎</button>` +
               `</div>`
             );
           }
@@ -665,6 +708,16 @@ function render(s) {
         .join("");
   }
 }
+
+// 启动：按系统/已保存的语言设定界面语言
+invoke("get_settings")
+  .then((info) => {
+    // lang_cfg：配置保存的语言（空=跟随系统）；lang_sys：系统检测（与用户设置无关）
+    sysLang = info.lang_sys || "zh-CN";
+    const saved = info.lang_cfg || ""; // 空 = 跟随系统
+    applyLanguage(saved || "system");
+  })
+  .catch(() => applyLanguage("system"));
 
 listen("overlay", (e) => render(e.payload));
 

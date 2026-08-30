@@ -18,8 +18,8 @@
           <span class="header-right">
             <span id="legend"></span>
             <span class="header-sep"></span>
-            <button id="settings-btn" title="设置 (F2)">设置</button>
-            <span id="hint">Esc 退出</span>
+            <button id="settings-btn" data-i18n-title="settings" data-i18n="settings">设置</button>
+            <span id="hint" data-i18n="escExit">Esc 退出</span>
           </span>
         </div>
         <div id="list"></div>
@@ -28,64 +28,69 @@
       <!-- 设置页（独立全屏页面） -->
       <div id="settings-view" hidden>
         <div id="settings-header">
-          <button id="settings-back" title="返回 (Esc)">← 返回</button>
-          <span id="settings-title">设置 <span id="settings-status" class="settings-status"></span></span>
-          <button id="settings-save" class="primary-btn" disabled>保存</button>
+          <button id="settings-back" data-i18n-title="setBack" data-i18n="setBack">← 返回</button>
+          <span id="settings-title"><span data-i18n="setTitle">设置</span> <span id="settings-status" class="settings-status"></span></span>
+          <button id="settings-save" class="primary-btn" data-i18n="setSave" disabled>保存</button>
         </div>
         <div id="settings-body">
           <div class="setting-section">
-            <div class="setting-group-title">窗口排序方式</div>
+            <div class="setting-group-title" data-i18n="setOrder">窗口排序方式</div>
             <label class="setting-row">
               <input type="radio" name="order" value="zorder" />
-              <span>固定序号（按创建顺序，不受使用影响）</span>
+              <span data-i18n="orderZ">固定序号（按创建顺序，不受使用影响）</span>
             </label>
             <label class="setting-row">
               <input type="radio" name="order" value="mru" />
-              <span>最近使用优先（上次用的排 1）</span>
+              <span data-i18n="orderMru">最近使用优先（上次用的排 1）</span>
             </label>
           </div>
 
           <div class="setting-section">
-            <div class="setting-group-title">模式</div>
+            <div class="setting-group-title" data-i18n="setMode">模式</div>
             <label class="setting-row">
               <input type="radio" name="mode" value="single" checked />
-              <span>单字母模式：每个程序一个字母键，一按直达</span>
+              <span data-i18n="modeSingle">单字母模式：每个程序一个字母键，一按直达</span>
             </label>
             <label class="setting-row">
               <input type="radio" name="mode" value="multi" />
-              <span>多字母模式：连续输入字母按代号/名称筛选，回车确认，代号可多字母（突破 26 个上限）</span>
+              <span data-i18n="modeMulti">多字母模式：连续输入字母按代号/名称筛选，回车确认，代号可多字母（突破 26 个上限）</span>
             </label>
             <div id="multi-opts" style="display:none">
-              <div class="setting-group-title" style="margin-top:12px">窗口层数字键</div>
+              <div class="setting-group-title" style="margin-top:12px" data-i18n="setWinDigit">窗口层数字键</div>
               <label class="setting-row">
                 <input type="radio" name="win-digit-mode" value="jump" checked />
-                <span>按数字直接跳转（窗口 ≤9 直切，&gt;9 快速连按组合编号）</span>
+                <span data-i18n-html="digitJump">按数字直接跳转（窗口 ≤9 直切，&gt;9 快速连按组合编号）</span>
               </label>
               <label class="setting-row">
                 <input type="radio" name="win-digit-mode" value="preview" />
-                <span>按数字先聚焦预览，回车确认（窗口 &gt;9 时 Backspace 退格）</span>
+                <span data-i18n-html="digitPreview">按数字先聚焦预览，回车确认（窗口 &gt;9 时 Backspace 退格）</span>
               </label>
             </div>
           </div>
 
           <div class="setting-section">
-            <div class="setting-group-title">主题</div>
+            <div class="setting-group-title" data-i18n="setLanguage">语言 / Language</div>
+            <div id="lang-options"></div>
+          </div>
+
+          <div class="setting-section">
+            <div class="setting-group-title" data-i18n="setTheme">主题</div>
             <div id="theme-options"></div>
           </div>
 
           <div class="setting-section">
-            <div class="setting-group-title">黑名单（已屏蔽的程序）</div>
+            <div class="setting-group-title" data-i18n="setBlocked">黑名单（已屏蔽的程序）</div>
             <div id="blocked-list" class="blocked-list"></div>
           </div>
 
           <div class="setting-section">
-            <button id="quit-btn" class="setting-row-btn">退出 WinHop</button>
+            <button id="quit-btn" class="setting-row-btn" data-i18n="quit">退出 WinHop</button>
           </div>
 
           <div class="setting-section">
-            <div class="setting-group-title">关于</div>
+            <div class="setting-group-title" data-i18n="about">关于</div>
             <div id="version-info" class="version-info">版本 …</div>
-            <div class="setting-group-title" style="margin-top:14px">更新记录</div>
+            <div class="setting-group-title" style="margin-top:14px" data-i18n="changelog">更新记录</div>
             <div id="changelog" class="changelog"></div>
           </div>
         </div>
@@ -94,11 +99,11 @@
       <!-- 未保存确认弹窗 -->
       <div id="confirm-mask" hidden>
         <div id="confirm-dialog">
-          <div class="confirm-text">有未保存的修改，是否保存？</div>
+          <div class="confirm-text" data-i18n="confirmText">有未保存的修改，是否保存？</div>
           <div class="confirm-buttons">
-            <button id="confirm-save" class="primary-btn">保存</button>
-            <button id="confirm-discard">不保存</button>
-            <button id="confirm-cancel">取消</button>
+            <button id="confirm-save" class="primary-btn" data-i18n="confirmSave">保存</button>
+            <button id="confirm-discard" data-i18n="confirmDiscard">不保存</button>
+            <button id="confirm-cancel" data-i18n="confirmCancel">取消</button>
           </div>
         </div>
       </div>

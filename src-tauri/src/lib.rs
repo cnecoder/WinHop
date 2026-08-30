@@ -859,6 +859,12 @@ struct SettingsInfo {
     multi_letter: bool,
     theme: String,
     win_digit_mode: String,
+    /// 当前生效语言（cfg.lang 为空则取系统检测值）
+    lang: String,
+    /// 配置里保存的语言（空=跟随系统；用于区分"明确选了 zh-CN"与"跟随系统恰好是中文"）
+    lang_cfg: String,
+    /// 系统检测语言（与用户设置无关，始终是 GetSystemDefault 结果）
+    lang_sys: String,
     themes: Vec<ThemeUi>,
     blocked: Vec<BlockedUi>,
     changelog: ChangelogUi,
@@ -905,6 +911,14 @@ fn get_settings(app: AppHandle) -> SettingsInfo {
         multi_letter: cfg.multi_letter,
         theme: cfg.theme.clone(),
         win_digit_mode: cfg.win_digit_mode.clone(),
+        // 当前生效语言：配置指定优先，空则跟随系统
+        lang: if cfg.lang.is_empty() {
+            windows::system_lang().to_string()
+        } else {
+            cfg.lang.clone()
+        },
+        lang_cfg: cfg.lang.clone(),
+        lang_sys: windows::system_lang().to_string(),
         themes: config::THEMES
             .iter()
             .map(|id| ThemeUi {
@@ -934,6 +948,9 @@ struct SettingsInput {
     multi_letter: bool,
     theme: String,
     win_digit_mode: String,
+    /// 界面语言（"zh-CN"/"en"；空串=跟随系统，由前端传 system 表达）
+    #[serde(default)]
+    lang: String,
     /// 设置页保存时黑名单保留的进程名（被解除的不在其中）
     #[serde(default)]
     blocked: Vec<String>,
@@ -951,6 +968,15 @@ fn save_settings(app: AppHandle, input: SettingsInput) -> Result<(), String> {
     if input.win_digit_mode != "jump" && input.win_digit_mode != "preview" {
         return Err(format!("无效的数字键行为「{}」", input.win_digit_mode));
     }
+    // lang：空=跟随系统（前端传 "system" 时归一为空），zh-CN/en 直接存
+    let lang: String = if input.lang == "system" {
+        String::new()
+    } else {
+        input.lang.clone()
+    };
+    if lang != "" && lang != "zh-CN" && lang != "en" {
+        return Err(format!("无效的语言「{}」", input.lang));
+    }
     let inner = app.state::<Inner>();
     {
         let mut cfg = inner.cfg.lock().unwrap();
@@ -958,6 +984,7 @@ fn save_settings(app: AppHandle, input: SettingsInput) -> Result<(), String> {
         cfg.multi_letter = input.multi_letter;
         cfg.theme = input.theme.clone();
         cfg.win_digit_mode = input.win_digit_mode.clone();
+        cfg.lang = lang;
         // 黑名单：设置页保存保留列表之外的（被解除的）才移除
         let keep: HashSet<String> = input.blocked.iter().map(|b| b.to_lowercase()).collect();
         cfg.blocked.retain(|b| keep.contains(b.process()));
