@@ -1,3 +1,4 @@
+mod capture;
 mod config;
 mod windows;
 
@@ -172,6 +173,10 @@ fn view_indices(ov: &OverlayState, multi: bool) -> Vec<usize> {
 }
 
 fn emit(app: &AppHandle, inner: &Inner, ov: &OverlayState) {
+    // 回到程序层时注销全部缩略图（覆盖层关闭由 close() 收尾）
+    if ov.phase != Phase::Windows {
+        windows::thumb_clear();
+    }
     let cfg = inner.cfg.lock().unwrap();
     let visible = inner.visible.load(Ordering::Relaxed);
     let multi = cfg.multi_letter;
@@ -390,6 +395,7 @@ fn close(app: &AppHandle) {
     let switched = ov.switched;
     drop(ov);
     windows::set_overlay_hwnd(0);
+    windows::thumb_clear();
     // 先隐藏再处理尺寸：若先退全屏，面板会在屏幕上可见地缩小跳动（闪烁）
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.hide();
@@ -575,6 +581,29 @@ async fn window_thumbnail(hwnd: isize, max_w: u32, max_h: u32) -> Result<String,
         eprintln!("[t={}] 转储 {}", windows::now_ms(), path.display());
     }
     Ok(format!("data:image/bmp;base64,{}", windows::base64(&bmp)))
+}
+
+// DWM 缩略图注册/更新：大预览用 slot "pane"，行缩略图用 "row:<hwnd>"。
+// x/y/w/h = 元素区域，ax/ay/aw/ah = 可视裁剪（0 表示不裁剪），覆盖层客户区物理像素
+#[tauri::command]
+fn thumb_set(
+    slot: String,
+    hwnd: isize,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    ax: i32,
+    ay: i32,
+    aw: i32,
+    ah: i32,
+) {
+    windows::thumb_set(slot, hwnd, x, y, w, h, ax, ay, aw, ah);
+}
+
+#[tauri::command]
+fn thumb_clear() {
+    windows::thumb_clear();
 }
 
 #[tauri::command]
@@ -1103,6 +1132,8 @@ pub fn run() {
             save_settings,
             quit_app,
             window_thumbnail,
+            thumb_set,
+            thumb_clear,
             toggle_fullscreen,
             edit_program,
             pick_program

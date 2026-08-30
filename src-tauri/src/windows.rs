@@ -2,10 +2,17 @@ use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use windows_sys::Win32::Foundation::{
-    CloseHandle, BOOL, GENERIC_WRITE, HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM, LRESULT, RECT,
-    WPARAM, ERROR_ALREADY_EXISTS, GetLastError,
+    CloseHandle, BOOL, GENERIC_WRITE, HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM, LRESULT, POINT,
+    RECT, WPARAM, ERROR_ALREADY_EXISTS, GetLastError,
 };
-use windows_sys::Win32::Graphics::Gdi::EnumDisplayMonitors;
+use windows_sys::Win32::Graphics::Dwm::{
+    DwmRegisterThumbnail, DwmUnregisterThumbnail, DwmUpdateThumbnailProperties,
+    DWM_THUMBNAIL_PROPERTIES, DWM_TNP_RECTDESTINATION, DWM_TNP_RECTSOURCE, DWM_TNP_VISIBLE,
+};
+use windows_sys::Win32::Graphics::Gdi::{
+    ClientToScreen, EnumDisplayMonitors, GetMonitorInfoW, MonitorFromWindow, MONITORINFO,
+    MONITOR_DEFAULTTONEAREST,
+};
 use windows_sys::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_QUERY};
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, SetFilePointer, FILE_END, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_ALWAYS,
@@ -18,12 +25,16 @@ use windows_sys::Win32::System::Threading::{
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     VK_MENU, keybd_event, KEYEVENTF_KEYUP,
 };
+use windows_sys::Win32::UI::HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi};
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    BringWindowToTop, EnumWindows, GetClassNameW, GetForegroundWindow, GetWindowRect,
-    GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindowVisible, MSLLHOOKSTRUCT,
-    SetForegroundWindow, SetWindowsHookExW, ShowWindow, SW_RESTORE, WM_LBUTTONDOWN, WM_MBUTTONDOWN,
-    WM_RBUTTONDOWN, WH_MOUSE_LL,
+    BringWindowToTop, EnumWindows, GetClassNameW, GetClientRect, GetForegroundWindow,
+    GetWindowPlacement, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, IsIconic,
+    IsWindow, IsWindowVisible, MSLLHOOKSTRUCT, SetForegroundWindow, SetWindowsHookExW,
+    SetWindowPos, ShowWindow, SM_CYCAPTION, SM_CXPADDEDBORDER, SM_CXSIZEFRAME, SM_CYSIZEFRAME,
+    SW_RESTORE, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+    WINDOWPLACEMENT, WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_RBUTTONDOWN, WH_MOUSE_LL,
+    WPF_RESTORETOMAXIMIZED,
 };
 
 #[derive(Clone)]
@@ -405,6 +416,314 @@ pub fn overlay_visible(hwnd: isize) -> bool {
     unsafe { hwnd != 0 && IsWindowVisible(hwnd as HWND) != 0 }
 }
 
+pub fn is_window(hwnd: isize) -> bool {
+    unsafe { hwnd != 0 && IsWindow(hwnd as HWND) != 0 }
+}
+
+// ===== DWM 缩略图（大预览 + 窗口层行缩略图，Win+Tab 同款）：DWM 直接把目标窗口纹理
+// 合成到覆盖层指定区域，零拷贝、实时、与遮挡/空闲无关——被全屏选择页盖住且空闲的
+// 窗口 WGC 也拿不到帧，DWM 缩略图不受限。
+// slot 区分注册位（"pane" 大预览 / "row:<hwnd>" 行），同 slot 换源先注销旧注册。
+
+static THUMBS: std::sync::Mutex<Option<std::collections::HashMap<String, (isize, isize)>>> =
+    std::sync::Mutex::new(None);
+
+// 缩略图源尺寸/偏移：最小化窗口的 GetClientRect 是极小的最小化尺寸，
+// 会导致 DWM 只截到一条小切片被放大——尺寸改用 rcNormalPosition（还原后尺寸），
+// 且最小化窗口的 DWM 源坐标系与普通窗口不同，需走"空源 + CLIENTONLY"路径
+fn effective_source(hwnd: HWND) -> (i32, i32, i32, i32, bool) {
+    unsafe {
+        let mut r = RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        if GetClientRect(hwnd, &mut r) == 0 {
+            return (0, 0, 0, 0, false);
+        }
+        let (cw, ch) = (r.right - r.left, r.bottom - r.top);
+        if IsIconic(hwnd) != 0 {
+            let mut wp = WINDOWPLACEMENT {
+                length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+                flags: 0,
+                showCmd: 0,
+                ptMinPosition: POINT { x: 0, y: 0 },
+                ptMaxPosition: POINT { x: 0, y: 0 },
+                rcNormalPosition: RECT { left: 0, top: 0, right: 0, bottom: 0 },
+            };
+            if GetWindowPlacement(hwnd, &mut wp) != 0 {
+                // 最大化后最小化（WPF_RESTORETOMAXIMIZED）：rcNormalPosition 是"还原尺寸"
+                // （如默认 1024x768），与当前最大化内容无关——内容尺寸取显示器工作区
+                if wp.flags & WPF_RESTORETOMAXIMIZED != 0 {
+                    let mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+                    let mut mi = MONITORINFO {
+                        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+                        rcMonitor: RECT { left: 0, top: 0, right: 0, bottom: 0 },
+                        rcWork: RECT { left: 0, top: 0, right: 0, bottom: 0 },
+                        dwFlags: 0,
+                    };
+                    if GetMonitorInfoW(mon, &mut mi) != 0 {
+                        let (mw, mh) = (
+                            mi.rcWork.right - mi.rcWork.left,
+                            mi.rcWork.bottom - mi.rcWork.top,
+                        );
+                        eprintln!(
+                            "[t={}] 缩略图最小化源(最大化) hwnd={:#x} workarea={}x{}",
+                            now_ms(),
+                            hwnd as isize,
+                            mw,
+                            mh
+                        );
+                        if mw > 0 && mh > 0 {
+                            return (mw, mh, 0, 0, true);
+                        }
+                    }
+                }
+                let n = wp.rcNormalPosition;
+                // 浮动窗口：还原尺寸即内容尺寸（rcNormalPosition 为 96 基准虚拟坐标，换回物理）
+                let dpi = GetDpiForWindow(hwnd).max(96);
+                let s = dpi as f64 / 96.0;
+                let (nw, nh) = (
+                    ((n.right - n.left) as f64 * s) as i32,
+                    ((n.bottom - n.top) as f64 * s) as i32,
+                );
+                if nw > 0 && nh > 0 {
+                    // 扣除物理边框对齐客户区
+                    let fx =
+                        GetSystemMetricsForDpi(SM_CXSIZEFRAME, dpi) + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+                    let fy =
+                        GetSystemMetricsForDpi(SM_CYSIZEFRAME, dpi) + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+                    let cap = GetSystemMetricsForDpi(SM_CYCAPTION, dpi);
+                    let (ew, eh) = (nw - 2 * fx, nh - 2 * fy - cap);
+                    eprintln!(
+                        "[t={}] 缩略图最小化源(浮动) hwnd={:#x} dpi={} normal={}x{} client={}x{}",
+                        now_ms(),
+                        hwnd as isize,
+                        dpi,
+                        nw,
+                        nh,
+                        ew,
+                        eh
+                    );
+                    if ew > 0 && eh > 0 {
+                        return (ew, eh, 0, 0, true);
+                    }
+                    return (nw, nh, 0, 0, true);
+                }
+            }
+        }
+        let (ox, oy) = client_origin_in_window(hwnd);
+        (cw, ch, ox, oy, false)
+    }
+}
+
+// 客户区原点在窗口坐标系中的偏移（rcSource 用窗口坐标，需精确剔除边框）
+fn client_origin_in_window(hwnd: HWND) -> (i32, i32) {
+    unsafe {
+        let mut pt = POINT { x: 0, y: 0 };
+        if ClientToScreen(hwnd, &mut pt) == 0 {
+            return (0, 0);
+        }
+        let mut wr = RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        if GetWindowRect(hwnd, &mut wr) == 0 {
+            return (0, 0);
+        }
+        (pt.x - wr.left, pt.y - wr.top)
+    }
+}
+
+// 注册/更新一个缩略图位。x/y/w/h = 元素完整区域，ax/ay/aw/ah = 可视裁剪区域
+// （滚动容器相交部分，均为覆盖层客户区物理像素）。源按窗口客户区等比 contain 居中。
+pub fn thumb_set(
+    slot: String,
+    hwnd: isize,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    ax: i32,
+    ay: i32,
+    aw: i32,
+    ah: i32,
+) {
+    let dest = get_overlay_hwnd();
+    if dest == 0 || !is_window(hwnd) {
+        return;
+    }
+    let shwnd = hwnd as HWND;
+    let (cw, ch, ox, oy, minimized) = effective_source(shwnd);
+    if w <= 0 || h <= 0 || cw <= 0 || ch <= 0 {
+        thumb_set_invisible(&slot);
+        return;
+    }
+    // 等比 contain 进元素区域（大预览/行缩略图都保持源窗口比例）
+    let scale = (w as f64 / cw as f64).min(h as f64 / ch as f64);
+    let fw = (cw as f64 * scale) as i32;
+    let fh = (ch as f64 * scale) as i32;
+    let fx = x + (w - fw) / 2;
+    let fy = y + (h - fh) / 2;
+    let clipped = ax > 0 || ay > 0 || aw > 0 || ah > 0;
+    // 目标矩形：行缩略图与可视裁剪框求交（滚出容器只显示可见部分），大预览用完整 contain 区
+    let (vx0, vy0, vx1, vy1) = if clipped {
+        (
+            fx.max(ax),
+            fy.max(ay),
+            (fx + fw).min(ax + aw),
+            (fy + fh).min(ay + ah),
+        )
+    } else {
+        (fx, fy, fx + fw, fy + fh)
+    };
+    if vx0 >= vx1 || vy0 >= vy1 {
+        // 完全滚出：保持注册但不可见
+        thumb_set_invisible(&slot);
+        return;
+    }
+    let rcd = RECT { left: vx0, top: vy0, right: vx1, bottom: vy1 };
+    let (flags, rcs) = if minimized {
+        // 最小化窗口：DWM 源坐标按客户区解释，显式给客户区尺寸（rcNormalPosition 扣边框）
+        (
+            DWM_TNP_RECTDESTINATION | DWM_TNP_VISIBLE | DWM_TNP_RECTSOURCE,
+            RECT { left: 0, top: 0, right: cw, bottom: ch },
+        )
+    } else if clipped {
+        // 行缩略图切片：rcSource 为窗口坐标下对应可视区域的部分
+        let src = RECT {
+            left: ox + ((vx0 - fx) as f64 / fw as f64 * cw as f64) as i32,
+            top: oy + ((vy0 - fy) as f64 / fh as f64 * ch as f64) as i32,
+            right: ox + ((vx1 - fx) as f64 / fw as f64 * cw as f64) as i32,
+            bottom: oy + ((vy1 - fy) as f64 / fh as f64 * ch as f64) as i32,
+        };
+        (DWM_TNP_RECTDESTINATION | DWM_TNP_VISIBLE | DWM_TNP_RECTSOURCE, src)
+    } else {
+        // 大预览：完整客户区
+        (
+            DWM_TNP_RECTDESTINATION | DWM_TNP_VISIBLE | DWM_TNP_RECTSOURCE,
+            RECT { left: ox, top: oy, right: ox + cw, bottom: oy + ch },
+        )
+    };
+    let visible = 1;
+    let props = DWM_THUMBNAIL_PROPERTIES {
+        dwFlags: flags,
+        rcDestination: rcd,
+        rcSource: rcs,
+        opacity: 255,
+        fVisible: visible,
+        fSourceClientAreaOnly: 0,
+    };
+    let mut map = THUMBS.lock().unwrap();
+    let map = map.get_or_insert_with(Default::default);
+    let id = match map.get(&slot) {
+        Some(&(sh, id)) if sh == hwnd && id != 0 => id,
+        Some(&(_, id)) => {
+            // 换源：注销旧注册
+            if id != 0 {
+                unsafe {
+                    DwmUnregisterThumbnail(id);
+                }
+            }
+            let mut nid: isize = 0;
+            let hr = unsafe { DwmRegisterThumbnail(dest as HWND, shwnd, &mut nid) };
+            if hr != 0 || nid == 0 {
+                eprintln!(
+                    "[t={}] DwmRegisterThumbnail 失败 slot={} hwnd={:#x} hr={}",
+                    now_ms(),
+                    slot,
+                    hwnd,
+                    hr
+                );
+                map.remove(&slot);
+                return;
+            }
+            map.insert(slot.clone(), (hwnd, nid));
+            nid
+        }
+        None => {
+            let mut nid: isize = 0;
+            let hr = unsafe { DwmRegisterThumbnail(dest as HWND, shwnd, &mut nid) };
+            if hr != 0 || nid == 0 {
+                eprintln!(
+                    "[t={}] DwmRegisterThumbnail 失败 slot={} hwnd={:#x} hr={}",
+                    now_ms(),
+                    slot,
+                    hwnd,
+                    hr
+                );
+                return;
+            }
+            map.insert(slot.clone(), (hwnd, nid));
+            nid
+        }
+    };
+    let hr = unsafe { DwmUpdateThumbnailProperties(id, &props) };
+    if hr != 0 {
+        eprintln!("[t={}] DwmUpdateThumbnailProperties 失败 hr={}", now_ms(), hr);
+        unsafe {
+            DwmUnregisterThumbnail(id);
+        }
+        map.remove(&slot);
+    }
+}
+
+// 已注册 slot 设为不可见（元素滚出/无内容时保持注册避免反复注册）
+fn thumb_set_invisible(slot: &str) {
+    let mut map = THUMBS.lock().unwrap();
+    let map = map.get_or_insert_with(Default::default);
+    if let Some(&(_, id)) = map.get(slot) {
+        if id != 0 {
+            let props = DWM_THUMBNAIL_PROPERTIES {
+                dwFlags: DWM_TNP_VISIBLE,
+                rcDestination: RECT { left: 0, top: 0, right: 0, bottom: 0 },
+                rcSource: RECT { left: 0, top: 0, right: 0, bottom: 0 },
+                opacity: 255,
+                fVisible: 0,
+                fSourceClientAreaOnly: 0,
+            };
+            unsafe {
+                DwmUpdateThumbnailProperties(id, &props);
+            }
+        }
+    }
+}
+
+// 注销全部缩略图（幂等；回程序层/关闭覆盖层时调用）
+pub fn thumb_clear() {
+    let ids: Vec<isize> = {
+        let mut map = THUMBS.lock().unwrap();
+        match std::mem::take(&mut *map) {
+            Some(m) => m.into_values().map(|(_, id)| id).collect(),
+            None => Vec::new(),
+        }
+    };
+    for id in ids {
+        unsafe {
+            DwmUnregisterThumbnail(id);
+        }
+    }
+}
+
+// 促使 DWM 重新合成目标窗口：被遮挡且空闲的窗口可能迟迟不出 WGC 初始帧，
+// FRAMECHANGED 触发一次重新合成即可逼出
+pub fn nudge_compose(hwnd: isize) {
+    unsafe {
+        SetWindowPos(
+            hwnd as HWND,
+            std::ptr::null_mut(),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+        );
+    }
+}
+
 pub fn get_overlay_hwnd() -> isize {
     MOUSE_CTX
         .get()
@@ -425,6 +744,15 @@ pub fn foreground() -> isize {
 static CAPTURE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 pub fn capture_window(hwnd: isize, max_w: u32, max_h: u32) -> Option<Vec<u8>> {
+    // WGC 优先：直捕 DWM 窗口纹理，与遮挡无关（PrintWindow 在窗口被全屏
+    // 选择页盖住时只能拿到标题栏一条）；失败回退 PrintWindow
+    if let Some(bmp) = crate::capture::snapshot_bmp(hwnd, max_w, max_h) {
+        return Some(bmp);
+    }
+    print_window_capture(hwnd, max_w, max_h)
+}
+
+fn print_window_capture(hwnd: isize, max_w: u32, max_h: u32) -> Option<Vec<u8>> {
     let _guard = CAPTURE_LOCK.lock().ok()?;
     unsafe {
         use windows_sys::Win32::Graphics::Gdi::{

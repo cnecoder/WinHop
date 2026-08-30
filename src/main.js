@@ -359,37 +359,58 @@ function startEditProgram(btn) {
 }
 
 let hoverIdx = null;
-let capturing = false;
 let lastWinKey = null;
 
-// 缩略图捕获：DWM Thumbnail 管道（win+tab 同款），每个窗口独立捕获，
-// 颜色正确、重叠窗口互不影响、无闪烁。进入窗口层时捕获一次（静态）。
-async function captureAll() {
-  if (capturing) return;
-  capturing = true;
-  try {
-    const rows = [...document.querySelectorAll(".wrow[data-hwnd]")];
-    const results = await Promise.all(
-      rows.map(async (row) => {
-        try {
-          const url = await invoke("window_thumbnail", {
-            hwnd: Number(row.dataset.hwnd),
-            maxW: 960,
-            maxH: 540,
-          });
-          return { row, url };
-        } catch (err) {
-          return { row, url: "" };
-        }
-      })
-    );
-    for (const { row, url } of results) {
-      const img = row.querySelector("img.wthumb");
-      if (img) img.src = url;
-    }
-    updatePreview();
-  } finally {
-    capturing = false;
+// ===== DWM 缩略图布局：行缩略图与大预览都由后端 DWM 合成（Win+Tab 同款，零拷贝实时） =====
+function dpr() {
+  return window.devicePixelRatio || 1;
+}
+
+// 元素物理 rect + 与滚动容器的可视裁剪 rect（ax/ay/aw/ah 为 0 表示不裁剪）
+function thumbRects(el, clipEl) {
+  const d = dpr();
+  const r = el.getBoundingClientRect();
+  const full = {
+    x: Math.round(r.left * d),
+    y: Math.round(r.top * d),
+    w: Math.round(r.width * d),
+    h: Math.round(r.height * d),
+  };
+  if (!clipEl) return { ...full, ax: 0, ay: 0, aw: 0, ah: 0 };
+  const c = clipEl.getBoundingClientRect();
+  const x0 = Math.max(r.left, c.left);
+  const y0 = Math.max(r.top, c.top);
+  const x1 = Math.min(r.right, c.right);
+  const y1 = Math.min(r.bottom, c.bottom);
+  return {
+    ...full,
+    ax: Math.round(x0 * d),
+    ay: Math.round(y0 * d),
+    aw: Math.round((x1 - x0) * d),
+    ah: Math.round((y1 - y0) * d),
+  };
+}
+
+// 按当前 DOM 布局注册/更新全部行缩略图（列表重建、滚动后调用）
+function layoutThumbs() {
+  if (!state || state.phase !== "windows") return;
+  const scrollEl = listEl.querySelector(".wlist");
+  for (const row of listEl.querySelectorAll(".wrow[data-hwnd]")) {
+    const img = row.querySelector(".wthumb");
+    if (!img) continue;
+    const t = thumbRects(img, scrollEl);
+    invoke("thumb_set", {
+      slot: "row:" + row.dataset.hwnd,
+      hwnd: Number(row.dataset.hwnd),
+      x: t.x,
+      y: t.y,
+      w: t.w,
+      h: t.h,
+      ax: t.ax,
+      ay: t.ay,
+      aw: t.aw,
+      ah: t.ah,
+    }).catch(() => {});
   }
 }
 
@@ -399,27 +420,28 @@ function scrollActiveIntoView() {
   if (active) active.scrollIntoView({ block: "nearest" });
 }
 
-// 右侧大预览：独立按 1920px 高清捕获（目标 = 悬停行优先，否则选中行）。
-// 行缩略图只有 960px，直接拉伸到大预览会模糊。
+// 右侧大预览：DWM 实时缩略图（目标 = 悬停行优先，否则选中行），后端等比 contain 到预览框
 let previewTarget = null;
 async function updatePreview() {
   const img = document.getElementById("preview-img");
   if (!img || !state || state.phase !== "windows") return;
   const idx = hoverIdx !== null ? hoverIdx : state.windows.findIndex((w) => w.active);
   const target = state.windows[Math.max(0, idx)];
-  if (!target || previewTarget === target.hwnd) return;
+  if (!target) return;
   previewTarget = target.hwnd;
-  img.dataset.hwnd = String(target.hwnd);
-  try {
-    const url = await invoke("window_thumbnail", {
-      hwnd: target.hwnd,
-      maxW: 1920,
-      maxH: 1080,
-    });
-    if (img && img.dataset.hwnd === String(target.hwnd)) img.src = url;
-  } catch (err) {
-    // 捕获失败：保留上一张
-  }
+  const r = thumbRects(img, null);
+  invoke("thumb_set", {
+    slot: "pane",
+    hwnd: target.hwnd,
+    x: r.x,
+    y: r.y,
+    w: r.w,
+    h: r.h,
+    ax: 0,
+    ay: 0,
+    aw: 0,
+    ah: 0,
+  }).catch(() => {});
 }
 
 // 悬停联动：预览跟随悬停行
@@ -487,11 +509,13 @@ function render(s) {
           .join("") +
         `</div>` +
         `<div class="wpreview"><img id="preview-img" alt="" /></div>`;
-      captureAll();
+      layoutThumbs();
       updatePreview();
     }
   } else {
     lastWinKey = null;
+    previewTarget = null;
+    invoke("thumb_clear");
     listEl.className = "";
     titleEl.textContent = "WinHop";
     // 多字母筛选无匹配：显示空状态提示，且不显示翻页
@@ -542,3 +566,6 @@ function render(s) {
 }
 
 listen("overlay", (e) => render(e.payload));
+
+// 行缩略图随滚动重排（capture 捕获 .wlist 自身滚动，列表重建后无需重绑）
+listEl.addEventListener("scroll", () => requestAnimationFrame(layoutThumbs), true);

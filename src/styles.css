@@ -464,6 +464,8 @@ body {
   display: flex;
   gap: 18px;
   padding-top: 12px;
+  /* app 上下 padding 48 + header 约 52 + 自身 padding-top 12，剩余全部给窗口层 */
+  height: calc(100vh - 124px);
 }
 
 .wlist {
@@ -472,7 +474,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  max-height: calc(100vh - 220px);
+  max-height: 100%;
   overflow-y: auto;
   border: 1px solid rgba(var(--accent-rgb), 0.3);
   border-radius: var(--r-panel);
@@ -523,7 +525,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 380px;
+  height: 100%;
   background: var(--surface);
   border-radius: var(--r-panel);
   border: 1px solid rgba(var(--accent-rgb), 0.3);
