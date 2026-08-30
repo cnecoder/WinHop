@@ -10,7 +10,7 @@ Windows 窗口快速切换器（Rust + Tauri 2 / WebView2，Windows-only）。�
 | [docs/debug.md](docs/debug.md) | **日志位置、三条输入路径、调试循环、键盘事故复盘**——改键盘/焦点/激活前必读 |
 | [docs/release.md](docs/release.md) | 版本号三处同步、双语 release note 规范、发布流程 |
 | [docs/TODO.md](docs/TODO.md) | 未完成需求与已知限制（先查这里，避免重复造） |
-| [docs/ADR-*.md](docs/) | 架构决策：001 技术栈、002 两层键位模型、003 窗口匹配、004 配置、005 热键/覆盖层 |
+| [docs/design.md](docs/design.md) | 设计文档（与当前实现一致）：技术栈、架构、两层键位模型、窗口匹配/激活、配置、输入架构 |
 | [docs/glossary.md](docs/glossary.md) | 术语（覆盖层、前台锁定等） |
 
 ## 代码结构

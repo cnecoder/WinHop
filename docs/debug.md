@@ -20,7 +20,7 @@ tail -f "$APPDATA/WinHop/winhop.log"
 
 ## 三条输入路径（改键盘行为前必读）
 
-键盘**不走**低级钩子（Chromium 前台用 raw input，`WH_KEYBOARD_LL` 看不见按键，见 [ADR-005](ADR-005-hotkey-overlay.md)）：
+键盘**不走**低级钩子（Chromium 前台用 raw input，`WH_KEYBOARD_LL` 看不见按键，详见 [design.md](design.md) 第 7 节）：
 
 1. **呼出/关闭热键**：`RegisterHotKey`（系统级，与前台无关）→ 插件 handler → `handle_key(Hotkey)`。
 2. **覆盖层内按键**：覆盖层 `set_focus` 夺焦后，WebView JS `keydown`（`src/main.js`）→ `invoke("key", {k})` → Rust `key()` → `handle_key()`。

@@ -17,4 +17,4 @@
 | 逐层回退 | Layer Back | Esc 在窗口层回程序层、程序层关闭覆盖层的回退行为 |
 | 鼠标钩子 | Mouse Hook | `WH_MOUSE_LL`，点击选择页外部时关闭（鼠标非 raw input，钩子可用） |
 
-关联文档: [[ADR-001-tech-stack]] [[ADR-002-keyboard-model]] [[ADR-003-window-matching]] [[ADR-004-config]] [[ADR-005-hotkey-overlay]]
+关联文档: [design.md](design.md)（合并原 ADR-001～005 的设计文档）
