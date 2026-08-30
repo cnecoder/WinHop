@@ -1,0 +1,43 @@
+# WinHop — Claude/Agent 工作指南
+
+Windows 窗口快速切换器（Rust + Tauri 2 / WebView2，Windows-only）。全局热键呼出全屏覆盖层，字母选程序、数字选窗口。
+
+## 必读文档（动手前）
+
+| 文档 | 内容 |
+|---|---|
+| [docs/build.md](docs/build.md) | 环境、dev 编译、单测、手动验证清单、正式打包 |
+| [docs/debug.md](docs/debug.md) | **日志位置、三条输入路径、调试循环、键盘事故复盘**——改键盘/焦点/激活前必读 |
+| [docs/release.md](docs/release.md) | 版本号三处同步、双语 release note 规范、发布流程 |
+| [docs/TODO.md](docs/TODO.md) | 未完成需求与已知限制（先查这里，避免重复造） |
+| [docs/ADR-*.md](docs/) | 架构决策：001 技术栈、002 两层键位模型、003 窗口匹配、004 配置、005 热键/覆盖层 |
+| [docs/glossary.md](docs/glossary.md) | 术语（覆盖层、前台锁定等） |
+
+## 代码结构
+
+- `src-tauri/src/lib.rs` — 状态机（`handle_key`）、Tauri 命令、配置读写编排、设置页 changelog
+- `src-tauri/src/windows.rs` — Win32：窗口枚举、激活、鼠标 LL 钩子、DWM 缩略图、语言/提权/单实例
+- `src-tauri/src/config.rs` — `config.json` 结构、加载迁移、校验、**原子保存**
+- `src/main.js` / `i18n.js` / `index.html` / `styles.css` — 覆盖层与设置页前端
+- 配置与日志：`%APPDATA%\WinHop\`（config.json、winhop.log）
+
+## 工作流（必须遵守）
+
+1. **先读后写**：理解意图再改；有多种理解时列出，不擅自选；不确定先问。
+2. **简洁优先、精准修改**：只动必须改的，不顺手重构/格式化相邻代码；注意到无关死代码先提出不擅自删。
+3. **改完自动验证**：`cd src-tauri && cargo build` 通过 → 启动 `./target/debug/winhop.exe`（debug 不弹 UAC）→ 查 `winhop.log` 启动正常 → 交给用户实测。**不主动杀用户在跑的实例**（release 提权需提权 taskkill，见 build.md）。
+4. **用户说「提交」** = `git commit` + `git push -u origin main`；没说不推。
+5. **书面内容主要用中文**；代码、命令、技术术语、API 名保持原文不汉化。
+
+## 高风险红线（踩过的坑）
+
+- **绝不注入键盘事件来激活窗口**。旧代码用 `keybd_event` 假 Alt 破解前台锁，down/up 落不同线程会让前台程序 Alt 永久卡死、整个键盘错乱。激活一律用 `SPI_SETFOREGROUNDLOCKTIMEOUT=0`（见 `windows.rs::activate` 与 debug.md）。
+- **键盘不走 LL 钩子**（Chromium raw input 看不见）。呼出靠 `RegisterHotKey`，覆盖层内按键靠 webview JS keydown；不要重新引入键盘钩子。
+- **鼠标 LL 钩子不拦截时必须 `CallNextHookEx`**，否则截断其它程序的钩子链。
+- **锁顺序**：状态机持 `overlay` 锁时，调 `close()` 等会再取 `overlay` 锁的路径前必须先 `drop(ov)`，否则死锁。
+- **激活目标窗口放独立线程**，且在覆盖层 `emit(visible=false)` 收尾之后启动；顺序反了会阻塞主线程、挂住鼠标钩子与热键。
+- **配置写入必须原子**（tmp + rename）；改坏 config 会让 `read_cfg` panic 起不来。
+
+## Release 要点
+
+发版：改三处版本号（tauri.conf.json / Cargo.toml / lib.rs 的 `CURRENT_CHANGELOG`）→ 更新 `CURRENT_CHANGELOG` 的 `notes_zh`/`notes_en`（设置页双语更新记录）→ 写 `docs/release-vX.Y.Z.md`（中英双语）→ `npm run tauri build` → 打 tag 推送 → 建 GitHub Release（流程见 release.md）。

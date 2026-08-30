@@ -1,6 +1,7 @@
 # 构建与验证指南
 
 覆盖两种场景：本地开发编译验证、正式发布安装包（exe/MSI）构建。
+调试与输入路径见 [debug.md](debug.md)；版本号、双语 release note、发布流程见 [release.md](release.md)。
 
 ## 环境前置
 
@@ -95,18 +96,7 @@ bundle/nsis/WinHop_X.Y.Z_x64-setup.exe    ← NSIS 安装包（推荐）
 
 ### 5. 发布到 GitHub
 
-```bash
-# 认证（首次）
-gh auth login
-
-# 打 tag + 建 release（名称/说明按需改）
-git tag v0.2.0
-git push origin v0.2.0
-gh release create v0.2.0 \
-  "src-tauri/target/release/bundle/nsis/WinHop_0.2.0_x64-setup.exe" \
-  "src-tauri/target/release/bundle/msi/WinHop_0.2.0_x64_en-US.msi" \
-  --title "WinHop 0.2.0" --notes "见仓库 docs/CHANGELOG 或历史 release"
-```
+打 tag、写双语 release note、建 Release（含 gh CLI 与网页两种方式）的完整流程见 [release.md](release.md)。
 
 ## 常见问题
 

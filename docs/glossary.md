@@ -12,7 +12,7 @@
 | 轮询切换 | Cycling | 窗口层内连按同字母，依次切下一个窗口（编号递增循环） |
 | Z 序 | Z-order | 窗口堆叠顺序，`EnumWindows` 返回序；编号 1 = 最上层 |
 | 屏幕标签 | Screen Tag | 条目上的 `[屏N]` 标记，表示窗口所在显示器 |
-| 前台锁定 | Foreground Lock | Windows 限制非前台进程调用 `SetForegroundWindow`，需 `AttachThreadInput` 技巧绕过 |
+| 前台锁定 | Foreground Lock | Windows 限制非前台进程调用 `SetForegroundWindow`；现用 `SPI_SETFOREGROUNDLOCKTIMEOUT=0` 临时解锁（**不注入按键**，曾用 keybd_event 假 Alt 导致前台程序 Alt 卡死，已废弃，见 [debug.md](debug.md)） |
 | 便携配置 | Portable Config | 配置文件放程序目录，复制目录即迁移 |
 | 逐层回退 | Layer Back | Esc 在窗口层回程序层、程序层关闭覆盖层的回退行为 |
 | 鼠标钩子 | Mouse Hook | `WH_MOUSE_LL`，点击选择页外部时关闭（鼠标非 raw input，钩子可用） |
