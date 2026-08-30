@@ -647,6 +647,140 @@ async fn toggle_fullscreen(app: AppHandle) {
     }
 }
 
+// 设置页打开时临时注销全局热键：否则录制中按下当前热键会被系统作为 WM_HOTKEY
+// 吞掉（webview 收不到 keydown，且触发 toggle）。保存时注册新键，放弃时 hotkey_resume 恢复。
+#[tauri::command]
+fn hotkey_suspend(app: AppHandle) {
+    let r = app.global_shortcut().unregister_all();
+    eprintln!("[winhop] hotkey_suspend unregister_all={:?}", r);
+}
+
+// 放弃修改 / 直接返回：恢复注册配置中的（旧）热键
+#[tauri::command]
+fn hotkey_resume(app: AppHandle) -> Result<(), String> {
+    let inner = app.state::<Inner>();
+    let hk = inner.cfg.lock().unwrap().hotkey.clone();
+    let sc = Shortcut::from_str(&hk).map_err(|e| format!("热键「{}」无效: {}", hk, e))?;
+    let r = app.global_shortcut().register(sc);
+    eprintln!("[winhop] hotkey_resume {} register={:?}", hk, r);
+    r.map_err(|e| format!("恢复热键失败: {}", e))?;
+    Ok(())
+}
+
+// ===== 热键录制：Rust 侧轮询 GetAsyncKeyState 检测组合 =====
+// webview 事件会被中文输入法吞掉（Ctrl+Space 的 keydown 被 IME 用于切中英），
+// 物理键状态 GetAsyncKeyState 不受影响——录制改走轮询，绕开事件系统。
+static CAPTURE: std::sync::OnceLock<std::sync::Mutex<Option<String>>> =
+    std::sync::OnceLock::new();
+static CAPTURE_ON: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+const VK_MODS: [(i32, &'static str); 6] = [
+    (0x11, "ctrl"),
+    (0xA2, "ctrl"),
+    (0xA3, "ctrl"),
+    (0x12, "alt"),
+    (0x10, "shift"),
+    (0x5B, "super"),
+];
+
+fn mods_down() -> Vec<&'static str> {
+    let mut out: Vec<&'static str> = Vec::new();
+    for (vk, name) in VK_MODS {
+        if unsafe { (windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(vk) as i32 & 0x8000) != 0 }
+            && !out.iter().any(|n| *n == name)
+        {
+            out.push(name);
+        }
+    }
+    // 固定顺序：ctrl alt shift super
+    let order = ["ctrl", "alt", "shift", "super"];
+    out.sort_by_key(|n| order.iter().position(|o| o == n).unwrap_or(99));
+    out
+}
+
+// 主键 vk → 组合串里的键名；None 表示该 vk 是修饰键
+fn vk_key_name(vk: i32) -> Option<String> {
+    match vk {
+        0x20 => Some("space".into()),
+        0x41..=0x5A => Some(((b'a' + (vk - 0x41) as u8) as char).to_string()),
+        0x30..=0x39 => Some(((b'0' + (vk - 0x30) as u8) as char).to_string()),
+        0x70..=0x87 => Some(format!("f{}", vk - 0x70 + 1)),
+        _ => None,
+    }
+}
+
+// 开始检测：后台线程轮询，主键「按下沿」+ 修饰键按住 → 记录组合，一次后停止
+#[tauri::command]
+fn hotkey_capture_start() {
+    use std::sync::atomic::Ordering;
+    use std::collections::HashSet;
+    CAPTURE.get_or_init(|| std::sync::Mutex::new(None));
+    CAPTURE_ON.store(true, Ordering::Relaxed);
+    std::thread::spawn(|| {
+        let mut prev: HashSet<i32> = HashSet::new();
+        let mut prev_mods: Vec<&'static str> = Vec::new();
+        while CAPTURE_ON.load(Ordering::Relaxed) {
+            let mods = mods_down();
+            let mut now: HashSet<i32> = HashSet::new();
+            for vk in 0x41..=0x5A { if key_down(vk) { now.insert(vk); } } // A-Z
+            for vk in 0x30..=0x39 { if key_down(vk) { now.insert(vk); } } // 0-9
+            for vk in 0x70..=0x87 { if key_down(vk) { now.insert(vk); } } // F1-F24
+            if key_down(0x20) { now.insert(0x20); } // Space
+            // 方向 1：主键按下沿（上一轮未按、本轮按下）且修饰键已按住
+            for &vk in now.difference(&prev) {
+                if mods.is_empty() { break; }
+                if capture_hit(&mods, vk) { return; }
+            }
+            // 方向 2：修饰键刚按下（按下沿）且已有主键按住（先按主键/同时按）
+            if !mods.is_empty()
+                && mods.iter().any(|m| !prev_mods.contains(m))
+                && !now.is_empty()
+            {
+                let vk = *now.iter().next().unwrap();
+                if capture_hit(&mods, vk) { return; }
+            }
+            prev = now;
+            prev_mods = mods;
+            std::thread::sleep(std::time::Duration::from_millis(30));
+        }
+    });
+}
+
+// 命中组合：mods + 主键 vk → 记录并停线程；返回 true 表示已命中
+fn capture_hit(mods: &[&'static str], vk: i32) -> bool {
+    if let Some(name) = vk_key_name(vk) {
+        let mut combo = mods.to_vec();
+        combo.push(name.as_str());
+        if let Some(slot) = CAPTURE.get() {
+            *slot.lock().unwrap() = Some(combo.join("+"));
+        }
+        CAPTURE_ON.store(false, std::sync::atomic::Ordering::Relaxed);
+        return true;
+    }
+    false
+}
+
+fn key_down(vk: i32) -> bool {
+    unsafe {
+        (windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(vk) as i32 & 0x8000) != 0
+    }
+}
+
+#[tauri::command]
+fn hotkey_capture_poll() -> Option<String> {
+    CAPTURE.get().and_then(|m| m.lock().unwrap().take())
+}
+
+#[tauri::command]
+fn hotkey_capture_stop() {
+    use std::sync::atomic::Ordering;
+    CAPTURE_ON.store(false, Ordering::Relaxed);
+    if let Some(m) = CAPTURE.get() {
+        *m.lock().unwrap() = None;
+    }
+}
+
 #[tauri::command]
 fn quit_app(app: AppHandle) {
     eprintln!("[t={}] 设置面板退出", windows::now_ms());
@@ -958,6 +1092,9 @@ fn get_settings(app: AppHandle) -> SettingsInfo {
 
 #[derive(serde::Deserialize)]
 struct SettingsInput {
+    /// 新全局热键（global-shortcut 串）；设置页打开期间热键已 suspend
+    #[serde(default)]
+    hotkey: String,
     window_order: String,
     multi_letter: bool,
     theme: String,
@@ -991,25 +1128,61 @@ fn save_settings(app: AppHandle, input: SettingsInput) -> Result<(), String> {
     if lang != "" && lang != "zh-CN" && lang != "en" {
         return Err(format!("无效的语言「{}」", input.lang));
     }
+    // 新热键解析校验（设置页期间热键已 suspend 注销）
+    let new_hotkey = input.hotkey.trim();
+    let new_sc = if new_hotkey.is_empty() {
+        None
+    } else {
+        Some(
+            Shortcut::from_str(new_hotkey)
+                .map_err(|e| format!("热键「{}」无效: {}", new_hotkey, e))?,
+        )
+    };
     let inner = app.state::<Inner>();
-    {
+    let old_hotkey = inner.cfg.lock().unwrap().hotkey.clone();
+    // 先注册新键：失败则回退注册旧键，配置不变更
+    if let Some(sc) = new_sc {
+        if let Err(e) = app.global_shortcut().register(sc) {
+            eprintln!("[winhop] 新热键注册失败 {:?}: {}，回退旧键", new_hotkey, e);
+            if let Ok(old) = Shortcut::from_str(&old_hotkey) {
+                let _ = app.global_shortcut().register(old);
+            }
+            return Err(format!("热键「{}」注册失败（可能被其它程序占用）", new_hotkey));
+        }
+    } else if let Ok(old) = Shortcut::from_str(&old_hotkey) {
+        // 未改热键：恢复注册旧键（suspend 期间被注销）
+        let _ = app.global_shortcut().register(old);
+    }
+    let save_res = {
         let mut cfg = inner.cfg.lock().unwrap();
         cfg.window_order = input.window_order.clone();
         cfg.multi_letter = input.multi_letter;
         cfg.theme = input.theme.clone();
         cfg.win_digit_mode = input.win_digit_mode.clone();
         cfg.lang = lang;
+        if new_sc.is_some() {
+            cfg.hotkey = new_hotkey.to_string();
+        }
         // 黑名单：设置页保存保留列表之外的（被解除的）才移除
         let keep: HashSet<String> = input.blocked.iter().map(|b| b.to_lowercase()).collect();
         cfg.blocked.retain(|b| keep.contains(b.process()));
-        config::save(&cfg, &inner.cfg_path).map_err(|e| format!("保存配置失败: {}", e))?;
+        config::save(&cfg, &inner.cfg_path)
+    };
+    if let Err(e) = save_res {
+        // 写盘失败（罕见）：回滚热键到旧值
+        if let Ok(old) = Shortcut::from_str(&old_hotkey) {
+            let _ = app.global_shortcut().unregister_all();
+            let _ = app.global_shortcut().register(old);
+        }
+        return Err(format!("保存配置失败: {}", e));
     }
     eprintln!(
-        "[t={}] 保存设置 order={} multi_letter={} theme={}",
+        "[t={}] 保存设置 order={} multi_letter={} theme={} hotkey={}",
         windows::now_ms(),
         input.window_order,
         input.multi_letter,
-        input.theme
+        input.theme,
+        new_hotkey
     );
     Ok(())
 }
@@ -1345,6 +1518,11 @@ pub fn run() {
             key,
             get_settings,
             save_settings,
+            hotkey_suspend,
+            hotkey_resume,
+            hotkey_capture_start,
+            hotkey_capture_poll,
+            hotkey_capture_stop,
             quit_app,
             thumb_set,
             thumb_clear,

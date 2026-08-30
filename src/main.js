@@ -51,6 +51,7 @@ function readSettingsForm() {
   const mode = document.querySelector('input[name="mode"]:checked');
   const wdm = document.querySelector('input[name="win-digit-mode"]:checked');
   return {
+    hotkey: formHotkey,
     window_order: order ? order.value : "zorder",
     multi_letter: (mode ? mode.value : "single") === "multi",
     theme: theme ? theme.value : "black-green",
@@ -67,6 +68,7 @@ function settingsDirty() {
   const curBlocked = [...(cur.blocked || [])].sort().join(",");
   const savedBlocked = [...(settingsLoaded.blocked || [])].sort().join(",");
   return (
+    cur.hotkey !== settingsLoaded.hotkey ||
     cur.window_order !== settingsLoaded.window_order ||
     cur.multi_letter !== settingsLoaded.multi_letter ||
     cur.theme !== settingsLoaded.theme ||
@@ -90,6 +92,7 @@ function updateSettingsState() {
 async function openSettings() {
   const info = await invoke("get_settings");
   settingsLoaded = {
+    hotkey: info.hotkey || "ctrl+space",
     window_order: info.window_order,
     multi_letter: info.multi_letter,
     theme: info.theme,
@@ -158,6 +161,11 @@ async function openSettings() {
       <div class="changelog-ver">${escapeHtml(e.version)} <span class="changelog-date">${escapeHtml(e.date)}</span></div>
       <ul>${notes.map((n) => `<li>${escapeHtml(n)}</li>`).join("")}</ul>
     </div>`;
+  // 热键：打开设置即临时注销（录制能收到组合键、且不误触 toggle）；保存时注册新键，放弃时 resume
+  formHotkey = info.hotkey || "ctrl+space";
+  hkListening = false;
+  renderHotkey();
+  invoke("hotkey_suspend").catch(() => {});
   updateSettingsState();
   settingsOpen = true;
   overlayView.hidden = true;
@@ -168,6 +176,12 @@ function closeSettings() {
   settingsOpen = false;
   settingsView.hidden = true;
   overlayView.hidden = false;
+}
+
+// 放弃修改（返回/不保存）：热键仍是 suspend 状态，恢复注册旧键
+function discardSettings() {
+  resumeHotkey();
+  closeSettings();
 }
 
 // 黑名单列表（设置页本地暂存：解除不立即生效，保存后统一写入）
@@ -221,18 +235,89 @@ function syncMultiOpts() {
     mode && mode.value === "multi" ? "" : "none";
 }
 
+// ===== 全局热键录制：设置页表单字段（保存才生效）。打开设置时 suspend 热键，
+// 放弃/返回时 resume 旧键，保存时由后端注册新键。
+// 检测在 Rust 侧轮询 GetAsyncKeyState（webview 事件会被中文输入法吞掉，
+// 物理键状态不受影响）；前端每 100ms 轮询取结果 =====
+const hotkeyDisplay = document.getElementById("hotkey-display");
+const hotkeyBtn = document.getElementById("hotkey-btn");
+let hkListening = false;
+let hkPollTimer = null;
+let formHotkey = ""; // 设置页内暂存的热键（未保存）
+
+// global-shortcut 串 → 展示文本（ctrl+space → Ctrl + Space）
+function prettyHotkey(hk) {
+  const name = { ctrl: "Ctrl", alt: "Alt", shift: "Shift", super: "Win", space: "Space" };
+  return hk
+    .split("+")
+    .map((k) => name[k] || (k.length === 1 ? k.toUpperCase() : k[0].toUpperCase() + k.slice(1)))
+    .join(" + ");
+}
+
+function renderHotkey() {
+  hotkeyDisplay.classList.toggle("listening", hkListening);
+  hotkeyDisplay.classList.remove("err");
+  hotkeyDisplay.textContent = formHotkey ? prettyHotkey(formHotkey) : "…";
+}
+
+function startHotkeyCapture() {
+  hkListening = true;
+  hotkeyDisplay.classList.add("listening");
+  hotkeyDisplay.classList.remove("err");
+  hotkeyDisplay.textContent = t("hotkeyListening");
+  hotkeyBtn.blur(); // 避免 Space/Enter 再触发按钮
+  invoke("hotkey_capture_start").catch(() => {});
+  hkPollTimer = setInterval(async () => {
+    try {
+      const combo = await invoke("hotkey_capture_poll");
+      if (combo) {
+        formHotkey = combo;
+        endHotkeyCapture();
+        updateSettingsState();
+      }
+    } catch {}
+  }, 100);
+}
+
+function endHotkeyCapture() {
+  hkListening = false;
+  if (hkPollTimer) {
+    clearInterval(hkPollTimer);
+    hkPollTimer = null;
+  }
+  invoke("hotkey_capture_stop").catch(() => {});
+  renderHotkey();
+}
+
+hotkeyBtn.addEventListener("click", startHotkeyCapture);
+
+// 放弃修改 / 直接返回：恢复注册旧热键
+async function resumeHotkey() {
+  try {
+    await invoke("hotkey_resume");
+  } catch {
+    /* 恢复失败不阻塞关闭 */
+  }
+}
+
 // 返回/ESC 时若有未保存改动则弹确认
 function requestCloseSettings() {
   if (settingsDirty()) {
     confirmMask.hidden = false;
   } else {
-    closeSettings();
+    discardSettings(); // 未改也返回：恢复 suspend 的热键
   }
 }
 
 async function saveSettingsAndClose() {
   const input = readSettingsForm();
-  await invoke("save_settings", { input });
+  try {
+    await invoke("save_settings", { input });
+  } catch (err) {
+    // 保存失败（多为新热键被占用）：后端已回退旧键，设置页保持打开供重试
+    document.getElementById("settings-status").textContent = String(err);
+    return;
+  }
   settingsLoaded = input;
   updateSettingsState();
   closeSettings(); // 先关设置页，再应用语言 → 覆盖层 render 不被 settingsOpen 早退挡住
@@ -280,6 +365,21 @@ function renderHeader(s) {
 window.addEventListener("keydown", (e) => {
   // 设置页按键独立处理
   if (settingsOpen) {
+    if (hkListening) {
+      // 录制中：Esc 结束录制、Enter 确认当前录制值（检测结果由轮询写入 formHotkey）
+      if (e.key === "Escape") {
+        e.preventDefault();
+        endHotkeyCapture();
+        return;
+      }
+      if (e.key === "Enter") {
+        e.preventDefault();
+        endHotkeyCapture();
+        return;
+      }
+      // 其余按键不拦截，交给 Rust 轮询检测
+      return;
+    }
     if (e.key === "Escape") {
       e.preventDefault();
       if (confirmMask.hidden) requestCloseSettings();
@@ -343,7 +443,7 @@ document.getElementById("confirm-discard").addEventListener("click", () => {
   confirmMask.hidden = true;
   // 丢弃未保存的主题预览，回退到已保存主题
   if (settingsLoaded) applyTheme(settingsLoaded.theme);
-  closeSettings();
+  discardSettings(); // 不保存：恢复旧热键
 });
 document.getElementById("confirm-cancel").addEventListener("click", () => {
   confirmMask.hidden = true;
@@ -616,6 +716,8 @@ function render(s) {
   if (s.theme) applyTheme(s.theme);
   if (!s.visible) {
     appEl.style.display = "none";
+    if (hkListening) endHotkeyCapture(); // 录制中：停检测
+    if (settingsOpen) resumeHotkey(); // 覆盖层关闭带走设置页：恢复 suspend 的热键
     settingsOpen = false;
     settingsView.hidden = true;
     overlayView.hidden = false;
