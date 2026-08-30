@@ -19,7 +19,9 @@ Rust + Tauri 2 (WebView2) · Windows 10/11 x64
 Switching between 2 Terminal windows (`t`) and 3 VS Code windows (`v`), plus Space to jump back to the previous window:
 
 <div align="center">
-  <video src="assets/demo.mp4" controls loop width="720"></video>
+
+[![WinHop demo](assets/demo.mp4)](assets/demo.mp4)
+
 </div>
 
 ## Why WinHop
