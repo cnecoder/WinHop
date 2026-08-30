@@ -835,21 +835,31 @@ const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 struct ChangelogEntry {
     version: &'static str,
     date: &'static str,
-    notes: &'static [&'static str],
+    notes_zh: &'static [&'static str],
+    notes_en: &'static [&'static str],
 }
 
-// 当前版本的更新记录（设置页只显示当前版本）
+// 当前版本的更新记录（设置页只显示当前版本，按界面语言取中/英文）
 const CURRENT_CHANGELOG: ChangelogEntry = ChangelogEntry {
-    version: "0.2.1",
+    version: "0.3.0",
     date: "2026-08",
-    notes: &[
-        "多字母模式：连续输入字母按代号/名称筛选，回车确认，可配置多字母代号（如 ch、vs），突破 26 字母上限",
-        "程序层每页 20 个，PageUp/PageDown 翻页；筛选无匹配时显示空状态提示",
-        "统一编辑：所有软件均可改名与配置代号，键位样式区分已配置运行 / 动态检测 / 未运行",
-        "皮肤系统：设置页可切换主题（黑绿 / 黑黄）",
-        "界面重设计：系统原生字体、中性底色、内描边选中、统一圆角，黑黄主题不再泛黄发暗",
-        "配置与日志迁至 %APPDATA%\\WinHop，升级重装不丢失",
-        "修复切换窗口后热键失效、软件名被截断或同名的问题",
+    notes_zh: &[
+        "修复切换窗口后键盘输入混乱：移除 Alt 按键注入、改用前台锁超时激活，彻底解决前台程序 Alt 卡死导致所有按键变成 Alt 组合",
+        "界面中英双语：默认跟随系统语言，设置页可手动切换并持久化",
+        "新增黑名单：可屏蔽不常用程序（✎ 编辑面板或设置页管理）",
+        "窗口层数字键新增「先聚焦预览」模式：按数字高亮预览、回车确认切换（设置页可选）",
+        "窗口缩略图改用 DWM 实时合成：被选择页遮挡、窗口最小化时也能清晰预览",
+        "修复空格快速跳转偶尔切错窗口",
+        "修复覆盖层打开时热键 / Alt+Tab 的焦点竞态，鼠标钩子不再干扰其它程序",
+    ],
+    notes_en: &[
+        "Fix garbled keyboard input after switching: removed synthetic Alt injection (it could leave Alt stuck in the foreground app, turning every key into an Alt combo); activation now uses the foreground-lock timeout",
+        "Bilingual UI (Chinese/English): follows the system language by default, manually switchable in settings",
+        "Blocklist: hide programs you don't need (via the ✎ edit panel or the settings page)",
+        "New window-layer digit mode: press a digit to highlight/preview, Enter to switch (configurable in settings)",
+        "Window thumbnails now use live DWM composition: clear previews even when covered by the picker or minimized",
+        "Fix Space quick-jump sometimes targeting the wrong window",
+        "Fix focus races with the hotkey / Alt+Tab while the picker is open; the mouse hook no longer interferes with other apps",
     ],
 };
 
@@ -888,7 +898,8 @@ struct ThemeUi {
 struct ChangelogUi {
     version: String,
     date: String,
-    notes: Vec<String>,
+    notes_zh: Vec<String>,
+    notes_en: Vec<String>,
 }
 
 // 主题 id → 显示名（与前端 styles.css 的 [data-theme=...] 对应）
@@ -939,7 +950,8 @@ fn get_settings(app: AppHandle) -> SettingsInfo {
         changelog: ChangelogUi {
             version: CURRENT_CHANGELOG.version.into(),
             date: CURRENT_CHANGELOG.date.into(),
-            notes: CURRENT_CHANGELOG.notes.iter().map(|s| s.to_string()).collect(),
+            notes_zh: CURRENT_CHANGELOG.notes_zh.iter().map(|s| s.to_string()).collect(),
+            notes_en: CURRENT_CHANGELOG.notes_en.iter().map(|s| s.to_string()).collect(),
         },
     }
 }

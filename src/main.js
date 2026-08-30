@@ -152,10 +152,11 @@ async function openSettings() {
   renderBlocked(info.blocked || []);
   document.getElementById("version-info").textContent = t("version", { v: info.version });
   const e = info.changelog;
+  const notes = isEn() ? e.notes_en : e.notes_zh;
   document.getElementById("changelog").innerHTML =
     `<div class="changelog-entry">
       <div class="changelog-ver">${escapeHtml(e.version)} <span class="changelog-date">${escapeHtml(e.date)}</span></div>
-      <ul>${e.notes.map((n) => `<li>${escapeHtml(n)}</li>`).join("")}</ul>
+      <ul>${notes.map((n) => `<li>${escapeHtml(n)}</li>`).join("")}</ul>
     </div>`;
   updateSettingsState();
   settingsOpen = true;
