@@ -128,12 +128,7 @@ Ctrl+Space（默认热键，可配置）
 WinHop 免费、开源，会一直免费下去。如果它确实帮你省了时间，你愿意的话可以请作者喝杯咖啡，这是对持续维护最大的鼓励。当然，不赞助也完全不影响使用。
 
 <div align="center">
-  <figure style="display:inline-block;margin:0 12px;">
-    <img src="assets/sponsor-wechat.png" alt="微信支付收款码" width="220" />
-    <figcaption>微信支付</figcaption>
-  </figure>
-  <figure style="display:inline-block;margin:0 12px;">
-    <img src="assets/sponsor-alipay.png" alt="支付宝收款码" width="220" />
-    <figcaption>支付宝</figcaption>
-  </figure>
+  <img src="assets/sponsor-wechat.png" alt="微信支付" width="210" />
+  <img src="assets/sponsor-alipay.png" alt="支付宝" width="210" />
+  <img src="assets/sponsor-ifdian.png" alt="爱发电" width="210" />
 </div>

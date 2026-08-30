@@ -128,12 +128,7 @@ The config file `config.json` lives in `%APPDATA%\WinHop\` (survives upgrades/re
 WinHop is free and open source, and it will stay that way. If it genuinely saves you time and you'd like to, you can buy the author a coffee — it's a huge encouragement to keep maintaining it. Sponsoring is entirely optional and never required to use the app.
 
 <div align="center">
-  <figure style="display:inline-block;margin:0 12px;">
-    <img src="assets/sponsor-wechat.png" alt="WeChat Pay QR" width="220" />
-    <figcaption>WeChat Pay</figcaption>
-  </figure>
-  <figure style="display:inline-block;margin:0 12px;">
-    <img src="assets/sponsor-alipay.png" alt="Alipay QR" width="220" />
-    <figcaption>Alipay</figcaption>
-  </figure>
+  <img src="assets/sponsor-wechat.png" alt="WeChat Pay" width="210" />
+  <img src="assets/sponsor-alipay.png" alt="Alipay" width="210" />
+  <img src="assets/sponsor-ifdian.png" alt="Ifdian" width="210" />
 </div>
