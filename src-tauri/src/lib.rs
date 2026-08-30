@@ -350,7 +350,17 @@ fn open(app: &AppHandle) {
     ov.digit_buf.clear();
     ov.switched = false;
     ov.last_activated = 0;
-    inner.prev_fg.store(windows::foreground(), Ordering::Relaxed);
+    let fg = windows::foreground();
+    inner.prev_fg.store(fg, Ordering::Relaxed);
+    // 把呼出前的前台窗口记入 MRU：MRU 原本只在经 WinHop 切换时更新，
+    // 用户用鼠标/任务栏切走后，Space 快速跳转就会拿错目标（跳过的"当前窗口"不是当前窗口）
+    if fg != 0 {
+        inner
+            .mru
+            .lock()
+            .unwrap()
+            .insert(fg, windows::now_ms());
+    }
     inner.visible.store(true, Ordering::Relaxed);
     eprintln!(
         "[t={}] overlay open ({} programs)",
