@@ -27,7 +27,7 @@ Switching between 2 Terminal windows (`t`) and 3 VS Code windows (`v`), plus Spa
 - **Keyboard-only, two keystrokes to any window**: `Ctrl+Space` to open, a letter for the program, a digit for the window. Hands stay on the keyboard.
 - **Switching only, not a launcher**: the list is what you see. Running programs are reached directly by their code; non-running ones are greyed out and not selectable. No extra clutter.
 - **A two-layer model that keeps you oriented**: program layer then window layer, where multi-window programs show thumbnails plus a large preview.
-- **Codes you can read at a glance**: solid bright badge = configured and running, dashed bright badge = auto-detected unconfigured program, grey = configured but not running.
+- **Codes you can read at a glance**: solid bright badge = configured and running, a `·` placeholder = no letter assigned (click to pick, use ✎ to assign one), grey = configured but not running.
 - **Lightweight and resident**: lives in the tray, single instance; runs elevated so it can switch admin windows like Task Manager.
 - **Simple, reliable config**: plain JSON in your user directory, survives upgrades/reinstalls, safe to commit to version control.
 
@@ -78,7 +78,7 @@ Ctrl+Space (default hotkey, configurable)
 ```
 
 - Non-running programs are shown greyed out at the end and are not selectable (switcher, not launcher).
-- Running unconfigured programs are auto-completed: single-letter mode assigns free letters by process name; multi-letter mode matches by name/code only.
+- Running unconfigured programs are still listed with a `·` placeholder: they're clickable to switch, but no letter is auto-assigned (assign one manually with ✎; clearing the letter and saving unbinds it).
 - Each window-layer row: number + title + screen tag + small thumbnail; the large preview on the right follows selection/hover.
 
 ### Edit a program

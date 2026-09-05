@@ -136,19 +136,19 @@ body {
 }
 
 #settings-btn {
-  background: rgba(var(--accent-rgb), 0.08);
-  border: 1px solid rgba(var(--accent-rgb), 0.5);
-  color: var(--accent);
+  background: var(--accent);
+  border: none;
+  color: var(--on-accent);
+  font-weight: 700;
   border-radius: var(--r-control);
-  padding: 2px 10px;
+  padding: 3px 12px;
   font-size: 12px;
   cursor: pointer;
-  transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease);
+  transition: background var(--dur) var(--ease);
 }
 
 #settings-btn:hover {
-  background: rgba(var(--accent-rgb), 0.16);
-  border-color: var(--accent);
+  background: var(--accent-strong);
 }
 
 #list {
@@ -159,16 +159,25 @@ body {
   display: flex;
   align-items: center;
   gap: 16px;
-  padding: 10px 12px;
+  padding: 6px 12px;
   border-radius: var(--r-row);
-  font-size: 17px;
+  font-size: 16px;
   transition: background var(--dur) var(--ease);
 }
 
+/* 程序层：占满视口剩余高度；卡片固定行高、从上到下排列，
+   每页最多 20 个（不足 20 顶部对齐，不居中/不拉伸）。
+   不设 overflow:hidden——长代号徽章向左溢出槽位、探进 app 左 padding，裁了会截断代号 */
 #list:not(.window-layer) {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
+  height: calc(100vh - 124px);
+}
+
+#list:not(.window-layer) .row {
+  flex: 0 0 auto;
+  height: 40px;
 }
 
 /* 模式徽章：紧贴 WinHop 标题右侧 */
@@ -224,7 +233,7 @@ body {
   font-size: 16px;
   color: var(--fg);
   background: var(--surface-2);
-  border: 1px solid rgba(var(--line-rgb), 0.16);
+  border: 1px solid rgba(var(--accent-rgb), 0.5);
   border-radius: var(--r-control);
 }
 
@@ -328,13 +337,6 @@ body {
   background: rgba(var(--accent-rgb), 0.18);
 }
 
-/* 动态检测（未配置）：虚线高亮 */
-.key.key-auto {
-  color: var(--accent);
-  border: 1px dashed var(--accent);
-  background: transparent;
-}
-
 /* 已配置但未运行：实线置灰 */
 .key.key-off {
   color: rgba(var(--line-rgb), 0.45);
@@ -350,25 +352,21 @@ body {
 }
 
 .edit-btn {
-  background: none;
-  border: 1px solid rgba(var(--line-rgb), 0.25);
-  color: var(--fg);
+  background: var(--accent);
+  border: none;
+  color: var(--on-accent);
   border-radius: var(--r-control);
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
   font-size: 13px;
   line-height: 1;
   cursor: pointer;
   flex-shrink: 0;
-  opacity: 0.55;
-  transition: color var(--dur) var(--ease), opacity var(--dur) var(--ease),
-    border-color var(--dur) var(--ease);
+  transition: background var(--dur) var(--ease);
 }
 
 .edit-btn:hover {
-  border-color: var(--accent);
-  color: var(--accent);
-  opacity: 1;
+  background: var(--accent-strong);
 }
 
 .key-input {
@@ -405,7 +403,7 @@ body {
 .name-input {
   flex: 1;
   background: var(--surface-2);
-  border: 1px solid rgba(var(--line-rgb), 0.2);
+  border: 1px solid rgba(var(--accent-rgb), 0.5);
   color: var(--fg);
   border-radius: var(--r-control);
   font-size: 14px;
@@ -414,39 +412,41 @@ body {
 
 .name-input:focus {
   border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), 0.3);
   outline: none;
 }
 
 .confirm-btn {
-  background: rgba(var(--accent-rgb), 0.14);
-  border: 1px solid var(--accent);
-  color: var(--accent);
+  background: var(--accent);
+  border: none;
+  color: var(--on-accent);
+  font-weight: 700;
   border-radius: var(--r-control);
   font-size: 13px;
-  padding: 3px 14px;
+  padding: 4px 16px;
   cursor: pointer;
   transition: background var(--dur) var(--ease);
 }
 
 .confirm-btn:hover {
-  background: rgba(var(--accent-rgb), 0.26);
+  background: var(--accent-strong);
 }
 
-/* 编辑面板「屏蔽」按钮：次要危险操作 */
+/* 编辑面板「屏蔽」按钮：同为可点按钮，统一实心填充 */
 .block-btn {
-  background: none;
-  border: 1px solid rgba(var(--line-rgb), 0.2);
-  color: var(--dim);
+  background: var(--accent);
+  border: none;
+  color: var(--on-accent);
+  font-weight: 700;
   border-radius: var(--r-control);
   font-size: 13px;
-  padding: 3px 14px;
+  padding: 4px 16px;
   cursor: pointer;
-  transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease);
+  transition: background var(--dur) var(--ease);
 }
 
 .block-btn:hover {
-  color: var(--error);
-  border-color: var(--error);
+  background: var(--accent-strong);
 }
 
 /* 设置页黑名单 */
@@ -489,20 +489,20 @@ body {
 }
 
 .blocked-unblock {
-  background: none;
-  border: 1px solid rgba(var(--line-rgb), 0.2);
-  color: var(--dim);
+  background: var(--accent);
+  border: none;
+  color: var(--on-accent);
+  font-weight: 700;
   border-radius: var(--r-control);
   font-size: 12px;
-  padding: 2px 12px;
+  padding: 3px 14px;
   cursor: pointer;
   flex-shrink: 0;
-  transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease);
+  transition: background var(--dur) var(--ease);
 }
 
 .blocked-unblock:hover {
-  color: var(--accent);
-  border-color: var(--accent);
+  background: var(--accent-strong);
 }
 
 .free-hint {
@@ -676,19 +676,19 @@ body {
 }
 
 #settings-back {
-  background: none;
-  border: 1px solid rgba(var(--line-rgb), 0.2);
-  color: var(--dim);
+  background: var(--accent);
+  border: none;
+  color: var(--on-accent);
+  font-weight: 700;
   border-radius: var(--r-control);
-  padding: 3px 12px;
+  padding: 5px 14px;
   font-size: 13px;
   cursor: pointer;
-  transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease);
+  transition: background var(--dur) var(--ease);
 }
 
 #settings-back:hover {
-  color: var(--fg);
-  border-color: var(--fg);
+  background: var(--accent-strong);
 }
 
 #settings-body {
@@ -725,23 +725,8 @@ body {
   height: 16px;
 }
 
-/* 复选框圆形实心点：与原生 radio 外观一致（未选=浅白点，选中=accent 点） */
-.setting-row input[type="checkbox"] {
-  appearance: none;
-  -webkit-appearance: none;
-  width: 15px;
-  height: 15px;
-  margin: 0;
-  border: none;
-  border-radius: 50%;
-  background: var(--fg);
-  cursor: pointer;
-  flex: none;
-}
-
-.setting-row input[type="checkbox"]:checked {
-  background: var(--accent);
-}
+/* 开机自启复用原生 radio 元素（见 index.html），外观由上方 .setting-row input[type="radio"]
+   统一渲染，与窗口排序/模式单选项完全一致；布尔开关语义由 main.js 的 click 处理 */
 
 .primary-btn {
   background: var(--accent);
@@ -771,20 +756,21 @@ body {
   color: var(--accent);
 }
 
+/* 次要可点按钮（录制、退出等）：与保存可点态一致——主题色实心填充 + 背景色文字 */
 .setting-row-btn {
-  background: none;
-  border: 1px solid rgba(var(--line-rgb), 0.2);
-  color: var(--dim);
+  background: var(--accent);
+  border: none;
+  color: var(--on-accent);
+  font-weight: 700;
   border-radius: var(--r-control);
   padding: 5px 16px;
   font-size: 13px;
   cursor: pointer;
-  transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease);
+  transition: background var(--dur) var(--ease);
 }
 
 .setting-row-btn:hover {
-  color: var(--error);
-  border-color: var(--error);
+  background: var(--accent-strong);
 }
 
 .version-info {
@@ -805,7 +791,8 @@ body {
   font-family: var(--font-mono);
   font-size: 14px;
   color: var(--fg);
-  border: 1px solid rgba(var(--line-rgb), 0.2);
+  border: 1px solid rgba(var(--accent-rgb), 0.5);
+  background: var(--surface-2);
   border-radius: var(--r-control);
   padding: 5px 14px;
   min-width: 160px;
@@ -902,18 +889,19 @@ body {
 }
 
 .confirm-buttons button {
-  background: none;
-  border: 1px solid rgba(var(--line-rgb), 0.25);
-  color: var(--fg);
+  background: var(--accent);
+  border: none;
+  color: var(--on-accent);
+  font-weight: 700;
   border-radius: var(--r-control);
-  padding: 5px 16px;
+  padding: 6px 18px;
   font-size: 13px;
   cursor: pointer;
-  transition: border-color var(--dur) var(--ease);
+  transition: background var(--dur) var(--ease);
 }
 
 .confirm-buttons button:hover {
-  border-color: var(--fg);
+  background: var(--accent-strong);
 }
 
 /* ===== 动效（仅 transform/opacity，短时长；reduced-motion 全关） ===== */

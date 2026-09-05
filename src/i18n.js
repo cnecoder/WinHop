@@ -8,7 +8,7 @@ export const I18N = {
     badgeSingle: "单字母",
     badgeMulti: "多字母",
     legendCfg: "已配置·运行",
-    legendAuto: "动态检测",
+    legendNone: "未配置字母",
     legendOff: "已配置·未运行",
     // 程序层
     filterLabel: "筛选",
@@ -68,7 +68,7 @@ export const I18N = {
     badgeSingle: "Single",
     badgeMulti: "Multi",
     legendCfg: "Configured·running",
-    legendAuto: "Auto-detected",
+    legendNone: "No letter",
     legendOff: "Configured·stopped",
     filterLabel: "Filter",
     filterHint: "Enter to confirm, Esc to clear, Backspace to delete",

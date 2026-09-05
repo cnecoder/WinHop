@@ -256,19 +256,15 @@ fn emit(app: &AppHandle, inner: &Inner, ov: &OverlayState) {
 }
 
 // 构造程序列表。
-// 单字母模式：已配置程序在前（保持配置字母），未配置运行中程序按进程名排序补全空闲单字母，
-//   上限 26（a-z）。
-// 多字母模式：已配置程序（带 multi_key）+ 全部未配置运行中程序（无代号），无数量限制，
-//   匹配/排序交给 view_indices。
+// 已配置程序（cfg.programs，含未运行的）在前；未配置的运行中程序按进程名排序追加，
+//   一律不自动分配字母（键位留空显示 ·，鼠标可点选、✎ 手动配键）。字母只能由用户显式配置。
+// 未运行的配置程序排到最后。
 fn build_prog_list(
     cfg: &Config,
     wins_by_proc: &HashMap<String, Vec<WinInfo>>,
-    multi: bool,
 ) -> Vec<ProgEntry> {
     let mut list: Vec<ProgEntry> = Vec::new();
-    let mut used: HashSet<String> = HashSet::new();
     for p in &cfg.programs {
-        used.insert(p.key.clone());
         list.push(ProgEntry {
             key: p.key.clone(),
             multi_key: p.multi_key.clone(),
@@ -283,19 +279,6 @@ fn build_prog_list(
         .collect();
     autos.sort();
     for proc in autos {
-        // 多字母模式：不自动分配单字母，全部纳入；单字母模式：取空闲字母，耗尽则停
-        let letter = if multi {
-            None
-        } else {
-            ('a'..='z').find(|c| !used.contains(&c.to_string()))
-        };
-        if !multi {
-            if let Some(l) = letter {
-                used.insert(l.to_string());
-            } else {
-                break; // 字母耗尽，不再补全
-            }
-        }
         let path = wins_by_proc.get(proc).and_then(|wins| wins.first()).map(|w| w.path.clone());
         let stem = path
             .as_deref()
@@ -308,18 +291,14 @@ fn build_prog_list(
             .and_then(windows::file_description)
             .unwrap_or(stem);
         list.push(ProgEntry {
-            key: letter.map(|c| c.to_string()).unwrap_or_default(),
+            key: String::new(),
             multi_key: String::new(),
             name,
             process: proc.clone(),
             configured: false,
         });
     }
-    if !multi {
-        // 单字母模式受 a-z 上限
-        list.truncate(26);
-    }
-    // 未运行的配置程序排到最后（运行中在前：配置序、自动补全次之；稳定排序保持组内顺序）
+    // 未运行的配置程序排到最后（运行中在前：配置序、未配置运行中次之；稳定排序保持组内顺序）
     list.sort_by_key(|e| {
         let running = wins_by_proc
             .get(&e.process)
@@ -350,7 +329,7 @@ fn open(app: &AppHandle) {
     }
     let mut ov = inner.overlay.lock().unwrap();
     ov.phase = Phase::Programs;
-    ov.prog_list = build_prog_list(&cfg, &wins_by_proc, cfg.multi_letter);
+    ov.prog_list = build_prog_list(&cfg, &wins_by_proc);
     ov.wins_by_proc = wins_by_proc;
     ov.prog_sel = 0;
     ov.prog_page = 0;
@@ -801,11 +780,11 @@ fn edit_program(
     if name.is_empty() {
         return Err("名称不能为空".into());
     }
-    // 单字母模式 key 必填且单字母；多字母模式 multi_key 可空（只按名称匹配），非空则全小写
+    // 代号非空则必须全小写；单字母模式非空时必须恰 1 个字母（空=清除字母绑定，仅改名/保留条目）
     if !key.is_empty() && !key.bytes().all(|b| b.is_ascii_lowercase()) {
         return Err("代号必须全为小写字母".into());
     }
-    if !multi && key.len() != 1 {
+    if !multi && !key.is_empty() && key.len() != 1 {
         return Err("单字母模式代号必须是单个字母".into());
     }
     let inner = app.state::<Inner>();
@@ -825,13 +804,16 @@ fn edit_program(
                 }
                 cfg.programs[idx].multi_key = key.clone();
             } else {
-                let conflict = cfg
-                    .programs
-                    .iter()
-                    .enumerate()
-                    .any(|(j, p)| j != idx && p.key == key);
-                if conflict {
-                    return Err(format!("字母「{}」已被占用", key));
+                // 空键=清除字母，不查重（空键程序不占字母）
+                if !key.is_empty() {
+                    let conflict = cfg
+                        .programs
+                        .iter()
+                        .enumerate()
+                        .any(|(j, p)| j != idx && p.key == key);
+                    if conflict {
+                        return Err(format!("字母「{}」已被占用", key));
+                    }
                 }
                 cfg.programs[idx].key = key.clone();
             }
@@ -841,7 +823,7 @@ fn edit_program(
             let conflict = if multi {
                 !key.is_empty() && cfg.programs.iter().any(|p| p.multi_key == key)
             } else {
-                cfg.programs.iter().any(|p| p.key == key)
+                !key.is_empty() && cfg.programs.iter().any(|p| p.key == key)
             };
             if conflict {
                 return Err(format!("代号「{}」已被占用", key));
@@ -882,7 +864,7 @@ fn rebuild_and_emit(app: &AppHandle, inner: &Inner) {
         wins.entry(w.process.clone()).or_default().push(w);
     }
     ov.wins_by_proc = wins;
-    ov.prog_list = build_prog_list(&cfg, &ov.wins_by_proc, cfg.multi_letter);
+    ov.prog_list = build_prog_list(&cfg, &ov.wins_by_proc);
     ov.prog_sel = 0;
     ov.prog_page = 0;
     ov.letter_buf.clear();
@@ -1711,6 +1693,48 @@ mod state_machine_tests {
         let v = view_indices(&ov, true);
         assert!(v.contains(&2));
         assert!(!v.contains(&0));
+    }
+
+    #[test]
+    fn build_prog_list_does_not_auto_assign_letters() {
+        use config::Config;
+        let cfg = Config {
+            hotkey: "ctrl+space".into(),
+            elevate: true,
+            autostart: false,
+            window_order: "zorder".into(),
+            multi_letter: false,
+            theme: "black-green".into(),
+            win_digit_mode: "jump".into(),
+            lang: String::new(),
+            programs: vec![Program {
+                key: "c".into(),
+                multi_key: String::new(),
+                name: "Chrome".into(),
+                process: "chrome.exe".into(),
+            }],
+            blocked: vec![],
+            blocked_seeded: true,
+        };
+        fn win(proc_: &str) -> WinInfo {
+            WinInfo { hwnd: 1, title: String::new(), process: proc_.into(), path: String::new(), monitor: 0 }
+        }
+        let mut wins: HashMap<String, Vec<WinInfo>> = HashMap::new();
+        wins.insert("chrome.exe".into(), vec![win("chrome.exe")]);
+        wins.insert("notepad.exe".into(), vec![win("notepad.exe")]);
+        wins.insert("spotify.exe".into(), vec![win("spotify.exe")]);
+
+        let list = build_prog_list(&cfg, &wins);
+        // 3 个进程都在（已配置 + 2 个未配置运行中）
+        assert_eq!(list.len(), 3);
+        let chrome = list.iter().find(|e| e.process == "chrome.exe").unwrap();
+        assert_eq!(chrome.key, "c"); // 已配置保留字母
+        // 未配置的运行中程序：字母留空（不再自动分配）
+        for proc_ in ["notepad.exe", "spotify.exe"] {
+            let e = list.iter().find(|x| x.process == proc_).unwrap();
+            assert!(e.key.is_empty(), "{} 不应被自动分配字母", proc_);
+            assert!(!e.configured);
+        }
     }
 
     #[test]

@@ -360,7 +360,7 @@ function renderHeader(s) {
   }
   legend.innerHTML =
     `<span class="legend-item"><span class="key key-cfg demo"></span>${t("legendCfg")}</span>` +
-    `<span class="legend-item"><span class="key key-auto demo"></span>${t("legendAuto")}</span>` +
+    `<span class="legend-item"><span class="key key-empty demo">·</span>${t("legendNone")}</span>` +
     `<span class="legend-item"><span class="key key-off demo"></span>${t("legendOff")}</span>`;
 }
 
@@ -435,9 +435,27 @@ document
     el.addEventListener("change", updateSettingsState);
   });
 
-document
-  .getElementById("autostart-check")
-  .addEventListener("change", updateSettingsState);
+// 开机自启复用原生 radio 元素（外观与排序/模式单选项完全一致），但语义是布尔开关：
+// radio 选中后默认点不掉，故在激活前（mousedown/keydown）记下旧状态，
+// 若点击时它本就已选中 → 拦截默认并手动取消；未选中 → 走默认选中（change 正常触发）
+const autostartCheck = document.getElementById("autostart-check");
+let autostartWasChecked = false;
+const captureAutostartWas = () => {
+  autostartWasChecked = autostartCheck.checked;
+};
+// mousedown 挂到包裹 label（点文字/圆点都会冒泡到这里），键盘走 input 的 keydown
+autostartCheck.closest("label").addEventListener("mousedown", captureAutostartWas);
+autostartCheck.addEventListener("keydown", (e) => {
+  if (e.key === " " || e.key === "Enter") captureAutostartWas();
+});
+autostartCheck.addEventListener("click", (e) => {
+  if (autostartWasChecked) {
+    e.preventDefault();
+    autostartCheck.checked = false;
+    updateSettingsState();
+  }
+});
+autostartCheck.addEventListener("change", updateSettingsState);
 
 document.getElementById("settings-save").addEventListener("click", () => {
   saveSettingsAndClose();
@@ -548,6 +566,10 @@ function startEditProgram(btn) {
       hint.appendChild(b);
       hint.appendChild(document.createTextNode(" "));
     }
+    const clearTip = document.createElement("span");
+    clearTip.className = "clear-hint";
+    clearTip.textContent = isEn() ? "(empty = clear letter)" : "（留空=清除字母）";
+    hint.appendChild(clearTip);
   } else {
     hint = document.createElement("span");
     hint.className = "free-hint";
@@ -559,8 +581,8 @@ function startEditProgram(btn) {
   const save = () => {
     const rawKey = keyInput.value.toLowerCase().replace(/[^a-z]/g, "");
     const v = nameInput.value.trim();
-    // 单字母模式必须 1 字符；多字母模式可留空（只按名称匹配），非空则 1+ 字母
-    if (!multi && rawKey.length !== 1) {
+    // 单字母模式：非空必须恰 1 个字母，留空=清除字母绑定；多字母模式可留空（只按名称匹配）
+    if (!multi && rawKey.length > 1) {
       keyInput.classList.add("err");
       setTimeout(() => keyInput.classList.remove("err"), 2000);
       return;
@@ -801,13 +823,12 @@ function render(s) {
         .map(
           (p) => {
             const hasKey = p.key && p.key.length > 0;
+            // 有字母：运行中=高亮 key-cfg，未运行=置灰 key-off；无字母=占位 key-empty
             const keyCls = !hasKey
               ? "key key-empty"
-              : p.configured
-                ? p.running
-                  ? "key key-cfg"
-                  : "key key-off"
-                : "key key-auto";
+              : p.running
+                ? "key key-cfg"
+                : "key key-off";
             const wide = p.key && p.key.length > 1 ? " key-wide" : "";
             return (
               `<div class="row${p.active ? " active" : ""}${p.running ? "" : " off"}" data-key="${escapeHtml(p.key)}" data-process="${escapeHtml(p.process)}">` +
