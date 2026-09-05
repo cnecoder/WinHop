@@ -136,15 +136,20 @@ async function openSettings() {
       updateSettingsState();
     });
   });
-  // 主题单选项由后端主题表动态生成
+  // 主题单选项由后端主题表动态生成；显示名按当前语言本地化（后端 name 仅兜底）
   const themeBox = document.getElementById("theme-options");
+  const themeName = (id, fallback) => {
+    const key = { "black-green": "themeBlackGreen", "black-yellow": "themeBlackYellow" }[id];
+    const localized = key ? t(key) : "";
+    return localized && localized !== key ? localized : fallback;
+  };
   themeBox.innerHTML = (info.themes || [])
     .map(
-      (t) =>
+      (th) =>
         `<label class="setting-row"><input type="radio" name="theme" value="${escapeHtml(
-          t.id
-        )}"${t.id === info.theme ? " checked" : ""} /><span>${escapeHtml(
-          t.name
+          th.id
+        )}"${th.id === info.theme ? " checked" : ""} /><span>${escapeHtml(
+          themeName(th.id, th.name)
         )}</span></label>`
     )
     .join("");
