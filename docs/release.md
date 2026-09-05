@@ -96,11 +96,20 @@ src-tauri/target/release/bundle/msi/WinHop_X.Y.Z_x64_en-US.msi    ← MSI
 
 ### 方式 A：CI 自动发布（推荐）
 
+**发布只需三步**：改版本号 + 双语 changelog → 提交并推送 main → 打 tag 推送。
+本地 `npm run tauri build` 不是必需（仅用于发布前本地验包）。
+
 推 `vX.Y.Z` tag 即触发 GitHub Actions（`.github/workflows/ci.yml`）：先跑测试，
 再 `npm run tauri build`，然后**幂等**发布——Release 不存在则 `gh release create`（note 用
 `--generate-notes`），已存在则 `gh release upload --clobber` 只覆盖安装包、**不动正文**。
 因此可先手动 `gh release create` 带上双语 note（方式 B），CI 构建完会把安装包补传到该 Release
 而不覆盖 note；或等 CI 建完再在 Release 页编辑补双语 note。
+
+**注意（踩过的坑）**：release 步骤的安装包路径在 **PowerShell** 里拼（Windows runner 默认 shell
+是 pwsh，不是 bash）——不能用 Bash 的 `${ver#v}` 去前缀语法（它是「变量名含 #」→ 恒空串，
+路径变 `WinHop__x64-setup.exe`），要用 `$noV = $ver -replace '^v',''` 再 `"WinHop_${noV}_x64-..."`。
+改 workflow 后必须**前移 tag**（`git tag -f` + `git push -f`）——tag 推送触发的工作流读的是
+tag 指向提交里的 ci.yml，旧 tag 会继续用旧脚本。
 
 ```bash
 git tag -a vX.Y.Z -m "WinHop vX.Y.Z"
