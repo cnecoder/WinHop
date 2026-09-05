@@ -46,9 +46,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # 注意：Windows runner 默认 shell 是 PowerShell，不用 Bash 的 ${ver#v} 去前缀语法
           $ver = $env:GITHUB_REF_NAME
-          $nsis = "src-tauri/target/release/bundle/nsis/WinHop_${ver#v}_x64-setup.exe"
-          $msi = "src-tauri/target/release/bundle/msi/WinHop_${ver#v}_x64_en-US.msi"
+          $noV = $ver -replace '^v',''
+          $nsis = "src-tauri/target/release/bundle/nsis/WinHop_${noV}_x64-setup.exe"
+          $msi = "src-tauri/target/release/bundle/msi/WinHop_${noV}_x64_en-US.msi"
           # 幂等：release 已存在（如手动先发了双语 note）则只覆盖资产、不动正文；否则新建
           if (gh release view $ver 2>$null) {
             gh release upload $ver $nsis $msi --clobber
