@@ -159,6 +159,13 @@ MRU 在经 WinHop 切换、呼出时记录前台、以及看门狗线程检测�
 - `Focused(false)`（Alt+Tab / Win 键离开）→ 关闭但**不还原旧前台**（用户已主动切走，不抢回）；选择窗口后的关闭才激活目标/还原。
 - 看门狗线程（2s）：检测「`visible=true` 但窗口不可见」的分叉状态强制关闭；顺带补录 MRU。
 
+### 热键录制（设置页）
+
+- **不走 webview 按键事件**：中文输入法会吞掉 `Ctrl+Space` 的 keydown（IME 用于切中英），前端只能收到 keyup；改由 Rust 后台线程每 30ms 轮询 `GetAsyncKeyState` 物理键状态（IME 不影响）。
+- 检测两个方向：① 主键（A-Z / 0-9 / F1-F24 / Space）按下沿且修饰键（Ctrl/Alt/Shift/Win，左右 Ctrl 归并）已按住；② 修饰键按下沿且主键已按住（覆盖先按主键/同时按）。命中即组合成 `ctrl+alt+...+主键` 存入槽位并停线程；前端 100ms 轮询 `hotkey_capture_poll` 取结果。
+- 打开设置页时 `hotkey_suspend`（`unregister_all`）临时注销全局热键——否则按下当前热键会被系统当作 `WM_HOTKEY` 吞掉并触发 toggle；放弃修改/返回时 `hotkey_resume` 恢复旧键。
+- 录制结果只暂存在表单（`formHotkey`），与其他设置一致：点「保存」才生效。保存时先注册新热键（失败则回滚注册旧键并报错，不写配置），成功后才原子落盘；Esc/Enter 结束录制。
+
 ### 提权与单实例
 
 - 管理员程序（taskmgr 等）受 UIPI 保护：非提权进程热键/激活被拒。release 且 `elevate` 时检测未提权则 `ShellExecute("runas")` 自提升重启（debug 跳过）。
