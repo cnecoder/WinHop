@@ -38,7 +38,7 @@
 | `--accent-strong` | `#48e08c` | `#fcd34d` | hover 加深 |
 | `--on-accent` | `#04240f` | `#241a02` | 放在 accent 实心填充上的文字色（深底对比） |
 
-**新增主题 = 加一个 `[data-theme="xxx"]` 块**（仅覆盖上述 4 个 accent 变量），并在 Rust 侧 `config::THEMES` 与 `lib.rs::theme_name` 登记。中性底色/文字不要随主题变。
+**新增主题 = 加一个 `[data-theme="xxx"]` 块**（仅覆盖上述 4 个 accent 变量），并在 Rust 侧 `config::THEMES` 登记 id、前端 `i18n.js` 加 `themeXxx` 中英文名 + `main.js` 的 `themeName` id→key 映射。Rust 只下发主题 id，显示名完全由前端 i18n 负责（不在 Rust 硬编码中文名）。中性底色/文字不要随主题变。
 
 ---
 
@@ -137,6 +137,6 @@ transition: background var(--dur) var(--ease);
 - [ ] 新按钮沿用实心 accent 规则；不可点才置灰；无自造描边/多色按钮。
 - [ ] 新输入框 accent 半透明边框、聚焦实心 accent、错误红框。
 - [ ] 单选/布尔用原生 radio（`accent-color`），不手绘。
-- [ ] 新主题只加 accent 变量块 + Rust 两处登记，不动中性令牌。
+- [ ] 新主题只加 accent 变量块 + `config::THEMES` 登记 id + 前端 i18n 名，不动中性令牌。
 - [ ] 动效被 `prefers-reduced-motion` 覆盖。
 - [ ] 中文文案走 i18n（`data-i18n` / `t()`），中英双语齐全。

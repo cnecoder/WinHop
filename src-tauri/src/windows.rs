@@ -958,6 +958,8 @@ mod tests {
     //（曾因读 ProductName 导致多个系统窗口全部识别成 "Microsoft Windows"）
     #[test]
     fn system_exe_not_generic_name() {
+        // 依赖系统二进制存在；缺失时显式标注 SKIP（不空转绿，暴露「断言未执行」）
+        let mut checked = 0;
         for p in [
             "C:\\Windows\\System32\\ApplicationFrameHost.exe",
             "C:\\Windows\\System32\\RuntimeBroker.exe",
@@ -970,7 +972,13 @@ mod tests {
                     "{} 返回了通用串",
                     p
                 );
+                checked += 1;
+            } else {
+                eprintln!("SKIP: {} 不存在，跳过该断言", p);
             }
+        }
+        if checked == 0 {
+            eprintln!("SKIP: system_exe_not_generic_name 无目标文件，全部断言未执行");
         }
     }
 
@@ -989,6 +997,9 @@ mod tests {
                 file_description(p.to_str().unwrap()).as_deref(),
                 Some("Google Chrome")
             );
+        } else {
+            // 本机/CI 未装 Chrome：断言无法执行，显式标注而非空转绿
+            eprintln!("SKIP: Chrome 未安装（{} 不存在），full_name_not_truncated 未执行", p.display());
         }
     }
 }

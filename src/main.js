@@ -1,5 +1,12 @@
 import { setLang, t, isEn, applyStaticI18n } from "./i18n.js";
-import { escapeHtml, prettyHotkey } from "./util.js";
+import {
+  escapeHtml,
+  prettyHotkey,
+  settingsFormEquals,
+  rectPhys,
+  clipRectPhys,
+  winHintKind,
+} from "./util.js";
 
 const { listen } = window.__TAURI__.event;
 const { invoke } = window.__TAURI__.core;
@@ -55,22 +62,10 @@ function readSettingsForm() {
   };
 }
 
-// 设置是否有未保存改动
+// 设置是否有未保存改动（表单当前值 vs 已保存快照；blocked 顺序无关）
 function settingsDirty() {
   if (!settingsLoaded) return false;
-  const cur = readSettingsForm();
-  const curBlocked = [...(cur.blocked || [])].sort().join(",");
-  const savedBlocked = [...(settingsLoaded.blocked || [])].sort().join(",");
-  return (
-    cur.hotkey !== settingsLoaded.hotkey ||
-    cur.autostart !== settingsLoaded.autostart ||
-    cur.window_order !== settingsLoaded.window_order ||
-    cur.multi_letter !== settingsLoaded.multi_letter ||
-    cur.theme !== settingsLoaded.theme ||
-    cur.win_digit_mode !== settingsLoaded.win_digit_mode ||
-    cur.lang !== settingsLoaded.lang ||
-    curBlocked !== savedBlocked
-  );
+  return !settingsFormEquals(readSettingsForm(), settingsLoaded);
 }
 
 // 更新保存按钮可用状态与状态文案
@@ -129,12 +124,11 @@ async function openSettings() {
       updateSettingsState();
     });
   });
-  // 主题单选项由后端主题表动态生成；显示名按当前语言本地化（后端 name 仅兜底）
+  // 主题单选项由后端下发 id 列表；显示名由前端 i18n 唯一负责（后端不硬编码中文名）
   const themeBox = document.getElementById("theme-options");
-  const themeName = (id, fallback) => {
+  const themeName = (id) => {
     const key = { "black-green": "themeBlackGreen", "black-yellow": "themeBlackYellow" }[id];
-    const localized = key ? t(key) : "";
-    return localized && localized !== key ? localized : fallback;
+    return key && t(key) !== key ? t(key) : id;
   };
   themeBox.innerHTML = (info.themes || [])
     .map(
@@ -142,7 +136,7 @@ async function openSettings() {
         `<label class="setting-row"><input type="radio" name="theme" value="${escapeHtml(
           th.id
         )}"${th.id === info.theme ? " checked" : ""} /><span>${escapeHtml(
-          themeName(th.id, th.name)
+          themeName(th.id)
         )}</span></label>`
     )
     .join("");
@@ -321,9 +315,14 @@ async function saveSettingsAndClose() {
 
 // 窗口层标题：多字母 + preview 模式提示数字聚焦/组合；其它模式只显示程序名
 function winHint(s) {
-  if (!s.multi_letter || s.win_digit_mode !== "preview") return s.title;
-  if (s.win_digit) return t("winTyped", { title: s.title, n: s.win_digit });
-  return t("winEnter", { title: s.title });
+  switch (winHintKind(s.multi_letter, s.win_digit_mode === "preview", s.win_digit)) {
+    case "typed":
+      return t("winTyped", { title: s.title, n: s.win_digit });
+    case "enter":
+      return t("winEnter", { title: s.title });
+    default:
+      return s.title;
+  }
 }
 
 function renderHeader(s) {
@@ -636,25 +635,9 @@ function dpr() {
 function thumbRects(el, clipEl) {
   const d = dpr();
   const r = el.getBoundingClientRect();
-  const full = {
-    x: Math.round(r.left * d),
-    y: Math.round(r.top * d),
-    w: Math.round(r.width * d),
-    h: Math.round(r.height * d),
-  };
+  const full = rectPhys(r, d);
   if (!clipEl) return { ...full, ax: 0, ay: 0, aw: 0, ah: 0 };
-  const c = clipEl.getBoundingClientRect();
-  const x0 = Math.max(r.left, c.left);
-  const y0 = Math.max(r.top, c.top);
-  const x1 = Math.min(r.right, c.right);
-  const y1 = Math.min(r.bottom, c.bottom);
-  return {
-    ...full,
-    ax: Math.round(x0 * d),
-    ay: Math.round(y0 * d),
-    aw: Math.round((x1 - x0) * d),
-    ah: Math.round((y1 - y0) * d),
-  };
+  return { ...full, ...clipRectPhys(r, clipEl.getBoundingClientRect(), d) };
 }
 
 // 按当前 DOM 布局注册/更新全部行缩略图（列表重建、滚动后调用）

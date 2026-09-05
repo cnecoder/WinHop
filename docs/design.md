@@ -28,10 +28,11 @@ WebView JS keydown ─invoke("key")─┘        (lib.rs)                       
 鼠标 WH_MOUSE_LL ─ClickOutside─┘
 ```
 
-- **状态机全在 Rust**（`src-tauri/src/lib.rs`）：`OverlayState`（阶段 `Closed/Programs/Windows`、程序列表、窗口列表、筛选缓冲、选中项、MRU 等），由 `handle_key(HookMsg)` 驱动。前端只渲染 `Render` 结构、回传按键/点击。
-- **Win32 层**（`src-tauri/src/windows.rs`）：窗口枚举、激活、鼠标钩子、DWM 缩略图、语言/提权/单实例/日志。
+- **状态机全在 Rust**（`src-tauri/src/lib.rs`）：`OverlayState`（阶段 `Closed/Programs/Windows`、程序列表、窗口列表、筛选缓冲、选中项、待激活 `pending`、MRU 等）。核心是**纯函数** `OverlayState::transition(msg, &cfg, &mut mru, now, overlay_hwnd, is_visible) -> Effect`——只改自身状态、返回 `Effect{None,Emit,Close,ActivateWindow}`，不碰 Tauri/锁，可直接单测。薄驱动 `handle_key`/`pick_program` 拿锁、clone 一份 cfg 快照调 transition，再由 `apply_effect` 落地（emit/close/轮询激活）。前端只渲染 `Render` 结构、回传按键/点击。
+- **Win32 层**（`src-tauri/src/windows.rs`）：窗口枚举、激活、鼠标钩子、DWM 缩略图、语言/提权/单实例/自启注册表/日志。
 - **配置层**（`src-tauri/src/config.rs`）：`config.json` 加载、迁移、校验、原子保存。
-- 状态查询用原子量（`visible`、`prev_fg`、`pending_activate`），共享状态用 `Mutex`；锁顺序固定（cfg 与 overlay 不嵌套长持），调 `close()` 等会重入取锁的路径前先 `drop(ov)`。
+- **设置页**（`src-tauri/src/settings.rs`）：`get_settings`/`save_settings` 命令、设置 DTO、changelog、热键注册与自启副作用；**热键录制**（`src-tauri/src/hotkey_capture.rs`）：`GetAsyncKeyState` 轮询检测组合键（绕开 IME 吞事件），自包含不依赖状态机。
+- 状态查询用原子量（`visible`、`prev_fg`），共享状态用 `Mutex`；transition 不持锁（驱动层一次性 clone cfg 快照、在锁内取 `&mut mru`），调 `close()` 等会重入取 overlay 锁的路径前先 `drop(ov)`。
 
 ## 4. 两层键位模型与交互
 

@@ -1,13 +1,15 @@
 mod config;
+mod hotkey_capture;
+mod settings;
 mod windows;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use config::{Config, Program};
+use config::{Config, Program, WinDigitMode, WindowOrder};
 use serde::Serialize;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -47,6 +49,8 @@ struct OverlayState {
     wins: Vec<WinInfo>,
     active: usize,
     last_activated: isize,
+    /// 本次呼出已明确选定、待 close 后激活的窗口（0=无）
+    pending: isize,
     digit_buf: String,
     switched: bool,
 }
@@ -64,6 +68,7 @@ impl Default for OverlayState {
             wins: Vec::new(),
             active: 0,
             last_activated: 0,
+            pending: 0,
             digit_buf: String::new(),
             switched: false,
         }
@@ -77,7 +82,6 @@ struct Inner {
     visible: Arc<AtomicBool>,
     overlay: Mutex<OverlayState>,
     prev_fg: AtomicIsize,
-    pending_activate: AtomicIsize,
 }
 
 #[derive(Serialize, Clone)]
@@ -117,6 +121,27 @@ struct Render {
     page_count: usize,
     /// 多字母模式窗口层：已输入的窗口索引（数字串），用于提示；Enter 确认
     win_digit: String,
+}
+
+impl Render {
+    // 覆盖层关闭时下发的空渲染（visible=false，列表清空）
+    fn closed(cfg: &Config) -> Render {
+        Render {
+            visible: false,
+            phase: "programs".into(),
+            title: String::new(),
+            window_order: cfg.window_order.as_str().into(),
+            multi_letter: cfg.multi_letter,
+            theme: cfg.theme.clone(),
+            win_digit_mode: cfg.win_digit_mode.as_str().into(),
+            filter: String::new(),
+            programs: Vec::new(),
+            windows: Vec::new(),
+            page: 1,
+            page_count: 1,
+            win_digit: String::new(),
+        }
+    }
 }
 
 // 计算单个条目对输入串的匹配得分：多字母快捷键优先（精确>前缀>子串），
@@ -174,6 +199,388 @@ fn view_indices(ov: &OverlayState, multi: bool) -> Vec<usize> {
     }
 }
 
+/// 状态机一次按键的副作用：纯逻辑只产出效果，由驱动层落地
+/// （emit 渲染 / close 收尾 / 激活轮询目标；轮询切换的实时激活本就绕过状态机）。
+#[derive(Debug, PartialEq, Clone, Copy)]
+enum Effect {
+    /// 状态未变
+    None,
+    /// 状态已改，需要重新 emit 渲染
+    Emit,
+    /// 用户选定窗口（pending 已置），驱动层应 close
+    Close,
+    /// 轮询切换：驱动层立即在独立线程激活（不关闭覆盖层）
+    ActivateWindow(isize),
+}
+
+impl OverlayState {
+    /// 纯状态转换：依据 msg/配置/MRU 修改自身并返回副作用。
+    /// - `cfg`：当前配置快照（调用方一次性 clone，转换中不持锁）
+    /// - `mru`：最近使用窗口时间戳表（可读可写）
+    /// - `now`：当前时间戳（驱动层传入 windows::now_ms，测试可固定）
+    /// - `overlay_hwnd`：覆盖层自身句柄（Space 快速跳转时排除）
+    /// - `is_visible`：句柄是否为可见窗口（Space 过滤用，测试可注入）
+    /// select_entry 的轮询激活返回 ActivateWindow（驱动层 deferred_activate），
+    /// 实时激活本就不经状态机/close，故不进 mru 之外的共享状态。
+    fn transition(
+        &mut self,
+        msg: &HookMsg,
+        cfg: &Config,
+        mru: &mut HashMap<isize, u64>,
+        now: u64,
+        overlay_hwnd: isize,
+        is_visible: &dyn Fn(isize) -> bool,
+    ) -> Effect {
+        match msg {
+            HookMsg::Esc => match self.phase {
+                Phase::Windows => {
+                    self.phase = Phase::Programs;
+                    self.sel_proc = None;
+                    self.digit_buf.clear();
+                    self.letter_buf.clear();
+                    Effect::Emit
+                }
+                Phase::Programs => {
+                    if !self.letter_buf.is_empty() {
+                        self.letter_buf.clear();
+                        self.prog_page = 0;
+                        Effect::Emit
+                    } else {
+                        Effect::Close
+                    }
+                }
+                Phase::Closed => Effect::None,
+            },
+            HookMsg::ClickOutside => Effect::Close,
+            HookMsg::Letter(c) => {
+                if cfg.multi_letter {
+                    if self.phase != Phase::Programs {
+                        return Effect::None;
+                    }
+                    self.letter_buf.push(*c);
+                    let v = view_indices(self, true);
+                    self.prog_sel = v.first().copied().unwrap_or(self.prog_sel);
+                    self.prog_page = 0;
+                    Effect::Emit
+                } else {
+                    self.select_by_letter(*c, cfg, mru, now)
+                }
+            }
+            HookMsg::Backspace => {
+                if self.phase == Phase::Programs && !self.letter_buf.is_empty() {
+                    self.letter_buf.pop();
+                    let v = view_indices(self, true);
+                    if !v.contains(&self.prog_sel) {
+                        self.prog_sel = v.first().copied().unwrap_or(self.prog_sel);
+                    }
+                    self.prog_page = 0;
+                    Effect::Emit
+                } else if self.phase == Phase::Windows
+                    && cfg.multi_letter
+                    && self.wins.len() > 9
+                    && !self.digit_buf.is_empty()
+                {
+                    self.digit_buf.pop();
+                    if let Ok(n) = self.digit_buf.parse::<usize>() {
+                        if n >= 1 && n <= self.wins.len() {
+                            self.active = n - 1;
+                        }
+                    }
+                    Effect::Emit
+                } else {
+                    Effect::None
+                }
+            }
+            HookMsg::Digit(d) => self.handle_digit(*d, cfg, mru, now),
+            HookMsg::Up | HookMsg::Down => {
+                let delta: isize = if matches!(msg, HookMsg::Up) { -1 } else { 1 };
+                match self.phase {
+                    Phase::Programs if !self.prog_list.is_empty() => {
+                        let view = view_indices(self, cfg.multi_letter);
+                        if view.is_empty() {
+                            return Effect::None;
+                        }
+                        let pos = view.iter().position(|&i| i == self.prog_sel).unwrap_or(0);
+                        let len = view.len() as isize;
+                        let new_pos = ((pos as isize + delta + len) % len) as usize;
+                        self.prog_sel = view[new_pos];
+                        self.sync_page(cfg.multi_letter);
+                        Effect::Emit
+                    }
+                    Phase::Windows if !self.wins.is_empty() => {
+                        let len = self.wins.len() as isize;
+                        self.active = ((self.active as isize + delta + len) % len) as usize;
+                        Effect::Emit
+                    }
+                    _ => Effect::None,
+                }
+            }
+            HookMsg::PageUp | HookMsg::PageDown => {
+                if self.phase != Phase::Programs || self.prog_list.is_empty() {
+                    return Effect::None;
+                }
+                let view = view_indices(self, cfg.multi_letter);
+                if view.is_empty() {
+                    return Effect::None;
+                }
+                let page_count = view.len().div_ceil(PROG_PAGE_SIZE);
+                let cur = self.prog_sel / PROG_PAGE_SIZE;
+                let new_page = if matches!(msg, HookMsg::PageDown) {
+                    (cur + 1).min(page_count - 1)
+                } else if cur == 0 {
+                    0
+                } else {
+                    cur - 1
+                };
+                self.prog_page = new_page;
+                let start = new_page * PROG_PAGE_SIZE;
+                let end = (start + PROG_PAGE_SIZE).min(view.len());
+                let page_items = &view[start..end];
+                if !page_items.contains(&self.prog_sel) {
+                    self.prog_sel = if matches!(msg, HookMsg::PageDown) {
+                        page_items[0]
+                    } else {
+                        *page_items.last().unwrap()
+                    };
+                }
+                Effect::Emit
+            }
+            HookMsg::Space => {
+                if self.phase != Phase::Programs {
+                    return Effect::None;
+                }
+                // MRU 中可见、非覆盖层的最新两个窗口，切到第二个（两窗口互切）
+                let mut recent: Vec<(u64, isize)> = mru
+                    .iter()
+                    .filter(|(&h, _)| h != 0 && h != overlay_hwnd)
+                    .map(|(&h, &ts)| (ts, h))
+                    .collect();
+                recent.sort_by(|a, b| b.0.cmp(&a.0));
+                let target = recent
+                    .iter()
+                    .filter(|(_, h)| is_visible(*h))
+                    .nth(1)
+                    .map(|&(_, h)| h);
+                if let Some(hwnd) = target {
+                    self.switched = true;
+                    self.last_activated = hwnd;
+                    mru.insert(hwnd, now);
+                    self.pending = hwnd;
+                    Effect::Close
+                } else {
+                    Effect::None
+                }
+            }
+            HookMsg::Jump(n) => {
+                if self.phase == Phase::Windows && self.resolve_window(*n + 1, mru, now) {
+                    Effect::Close
+                } else {
+                    Effect::None
+                }
+            }
+            HookMsg::Enter => match self.phase {
+                Phase::Programs => {
+                    if self.prog_list.is_empty() {
+                        Effect::None
+                    } else {
+                        let view = view_indices(self, cfg.multi_letter);
+                        if view.is_empty() {
+                            Effect::None // 无匹配，Enter 无动作
+                        } else {
+                            // 多字母筛选后 prog_sel 已是匹配最高项；不在视图内（边界）取首项
+                            let idx = if view.contains(&self.prog_sel) {
+                                self.prog_sel
+                            } else {
+                                view[0]
+                            };
+                            self.select_indexed(idx, cfg, mru, now)
+                        }
+                    }
+                }
+                Phase::Windows => {
+                    if self.resolve_window(self.active + 1, mru, now) {
+                        Effect::Close
+                    } else {
+                        Effect::None
+                    }
+                }
+                Phase::Closed => Effect::None,
+            },
+            // Hotkey 由驱动层处理（toggle 开/关），不进转换
+            HookMsg::Hotkey => Effect::None,
+        }
+    }
+
+    // 数字键（窗口层）：单字母累积 n*10>total 即跳；多字母 ≤9 直切、>9 组合编号；
+    // preview 模式只聚焦不跳转。
+    fn handle_digit(
+        &mut self,
+        d: char,
+        cfg: &Config,
+        mru: &mut HashMap<isize, u64>,
+        now: u64,
+    ) -> Effect {
+        if self.phase != Phase::Windows || self.wins.is_empty() {
+            return Effect::None;
+        }
+        let total = self.wins.len();
+        let preview = cfg.win_digit_mode == WinDigitMode::Preview;
+        if !cfg.multi_letter {
+            // 单字母模式：数字累积，n*10 > total（再加一位必超总数）立即跳转
+            self.digit_buf.push(d);
+            if let Ok(n) = self.digit_buf.parse::<usize>() {
+                if n >= 1 && n * 10 > total && self.resolve_window(n, mru, now) {
+                    return Effect::Close;
+                }
+            }
+            Effect::None
+        } else if total <= 9 {
+            // 窗口 ≤9：每个数字独立，按到即定
+            let n = d.to_digit(10).unwrap_or(0) as usize;
+            if n < 1 || n > total {
+                return Effect::None;
+            }
+            self.digit_buf = n.to_string();
+            if preview {
+                self.active = n - 1;
+                Effect::Emit
+            } else if self.resolve_window(n, mru, now) {
+                Effect::Close
+            } else {
+                Effect::None
+            }
+        } else {
+            // 窗口 >9：组合编号（1 然后 2 = 12），Backspace 退格
+            self.digit_buf.push(d);
+            let n = match self.digit_buf.parse::<usize>() {
+                Ok(n) => n,
+                Err(_) => {
+                    self.digit_buf.pop();
+                    return Effect::None;
+                }
+            };
+            if n < 1 || n > total {
+                self.digit_buf.pop(); // 超界，忽略本次输入
+                return Effect::None;
+            }
+            self.active = n - 1;
+            if preview {
+                Effect::Emit
+            } else if n * 10 > total && self.resolve_window(n, mru, now) {
+                // 再加一位必超总数 → 立即跳转；否则等下一位或 Enter 确认
+                Effect::Close
+            } else {
+                Effect::None
+            }
+        }
+    }
+
+    fn sync_page(&mut self, multi: bool) {
+        let view = view_indices(self, multi);
+        if let Some(pos) = view.iter().position(|&i| i == self.prog_sel) {
+            self.prog_page = pos / PROG_PAGE_SIZE;
+        }
+    }
+
+    // 单字母模式按代号选中
+    fn select_by_letter(
+        &mut self,
+        c: char,
+        cfg: &Config,
+        mru: &mut HashMap<isize, u64>,
+        now: u64,
+    ) -> Effect {
+        let Some((idx, entry)) = self
+            .prog_list
+            .iter()
+            .enumerate()
+            .find(|(_, e)| e.key == c.to_string())
+            .map(|(i, e)| (i, e.clone()))
+        else {
+            return Effect::None;
+        };
+        self.prog_sel = idx;
+        self.sync_page(cfg.multi_letter);
+        self.select_entry(&entry, cfg, mru, now)
+    }
+
+    // Enter/点击：按视图绝对索引选中
+    fn select_indexed(
+        &mut self,
+        idx: usize,
+        cfg: &Config,
+        mru: &mut HashMap<isize, u64>,
+        now: u64,
+    ) -> Effect {
+        let entry = self.prog_list[idx].clone();
+        self.select_entry(&entry, cfg, mru, now)
+    }
+
+    // 选中程序层条目：
+    // - 窗口层重复选中同一程序 → 轮询切下一窗口，返回 ActivateWindow（驱动层实时激活，不关闭）
+    // - 单窗口 → 置 pending，返回 Close
+    // - 多窗口 → 进窗口层，返回 Emit
+    fn select_entry(
+        &mut self,
+        entry: &ProgEntry,
+        cfg: &Config,
+        mru: &mut HashMap<isize, u64>,
+        now: u64,
+    ) -> Effect {
+        let wins = match self.wins_by_proc.get(&entry.process) {
+            Some(w) if !w.is_empty() => w,
+            _ => return Effect::None,
+        };
+        if self.phase == Phase::Windows
+            && self.sel_proc.as_deref() == Some(entry.process.as_str())
+        {
+            self.active = (self.active + 1) % wins.len();
+            let hwnd = wins[self.active].hwnd;
+            self.last_activated = hwnd;
+            mru.insert(hwnd, now);
+            return Effect::ActivateWindow(hwnd);
+        }
+        if wins.len() == 1 {
+            let hwnd = wins[0].hwnd;
+            self.switched = true;
+            self.last_activated = hwnd;
+            mru.insert(hwnd, now);
+            self.pending = hwnd;
+            Effect::Close
+        } else {
+            self.phase = Phase::Windows;
+            self.sel_proc = Some(entry.process.clone());
+            self.letter_buf.clear();
+            // 排序：mru 按最近使用倒序（1=上次用的）；zorder 按句柄序（创建序，稳定）
+            let mut wins = wins.clone();
+            if cfg.window_order == WindowOrder::Mru {
+                wins.sort_by_key(|w| std::cmp::Reverse(mru.get(&w.hwnd).copied().unwrap_or(0)));
+            } else {
+                wins.sort_by_key(|w| w.hwnd);
+            }
+            self.wins = wins;
+            self.active = 0;
+            self.digit_buf.clear();
+            Effect::Emit
+        }
+    }
+
+    // 选定窗口 n（1-based）：置 switched/last_activated/pending、记 mru。返回是否有效。
+    fn resolve_window(&mut self, n: usize, mru: &mut HashMap<isize, u64>, now: u64) -> bool {
+        let total = self.wins.len();
+        if total == 0 || n < 1 {
+            return false;
+        }
+        let idx = (n - 1).min(total - 1);
+        let hwnd = self.wins[idx].hwnd;
+        self.switched = true;
+        self.last_activated = hwnd;
+        mru.insert(hwnd, now);
+        self.pending = hwnd;
+        true
+    }
+}
+
 fn emit(app: &AppHandle, inner: &Inner, ov: &OverlayState) {
     // 回到程序层时注销全部缩略图（覆盖层关闭由 close() 收尾）
     if ov.phase != Phase::Windows {
@@ -191,10 +598,10 @@ fn emit(app: &AppHandle, inner: &Inner, ov: &OverlayState) {
         visible,
         phase: "programs".into(),
         title: String::new(),
-        window_order: cfg.window_order.clone(),
+        window_order: cfg.window_order.as_str().into(),
         multi_letter: multi,
         theme: cfg.theme.clone(),
-        win_digit_mode: cfg.win_digit_mode.clone(),
+        win_digit_mode: cfg.win_digit_mode.as_str().into(),
         filter: if multi { ov.letter_buf.clone() } else { String::new() },
         programs: Vec::new(),
         windows: Vec::new(),
@@ -317,20 +724,25 @@ fn build_prog_list(
     list
 }
 
+// 枚举当前窗口并按进程分组，黑名单（系统预置 + 用户屏蔽）不进入
+fn group_windows(cfg: &Config) -> HashMap<String, Vec<WinInfo>> {
+    let mut wins_by_proc: HashMap<String, Vec<WinInfo>> = HashMap::new();
+    for w in windows::enum_windows() {
+        if cfg.blocked.iter().any(|b| b.process() == w.process) {
+            continue;
+        }
+        wins_by_proc.entry(w.process.clone()).or_default().push(w);
+    }
+    wins_by_proc
+}
+
 fn open(app: &AppHandle) {
     let inner = app.state::<Inner>();
     if inner.visible.load(Ordering::Relaxed) {
         return;
     }
-    let mut all: Vec<WinInfo> = windows::enum_windows();
     let cfg = inner.cfg.lock().unwrap().clone();
-    let mut wins_by_proc: HashMap<String, Vec<WinInfo>> = HashMap::new();
-    for w in all.drain(..) {
-        if cfg.blocked.iter().any(|b| b.process() == w.process) {
-            continue; // 黑名单（系统预置 + 用户屏蔽）
-        }
-        wins_by_proc.entry(w.process.clone()).or_default().push(w);
-    }
+    let wins_by_proc = group_windows(&cfg);
     let mut ov = inner.overlay.lock().unwrap();
     ov.phase = Phase::Programs;
     ov.prog_list = build_prog_list(&cfg, &wins_by_proc);
@@ -343,6 +755,7 @@ fn open(app: &AppHandle) {
     ov.digit_buf.clear();
     ov.switched = false;
     ov.last_activated = 0;
+    ov.pending = 0;
     let fg = windows::foreground();
     inner.prev_fg.store(fg, Ordering::Relaxed);
     // 把呼出前的前台窗口记入 MRU：MRU 原本只在经 WinHop 切换时更新，
@@ -417,6 +830,7 @@ fn close_impl(app: &AppHandle, restore_prev: bool) {
         ov.switched
     );
     let switched = ov.switched;
+    let pending = ov.pending;
     drop(ov);
     windows::set_overlay_hwnd(0);
     windows::thumb_clear();
@@ -426,7 +840,6 @@ fn close_impl(app: &AppHandle, restore_prev: bool) {
     }
     // 决定要激活的目标窗口（先记下来，spawn 放到 emit 之后）。
     // pending（用户明确选了窗口）总是优先；否则仅 restore_prev 路径回退 prev_fg
-    let pending = inner.pending_activate.swap(0, Ordering::Relaxed);
     let target = if pending != 0 {
         pending
     } else if restore_prev && !switched {
@@ -440,21 +853,7 @@ fn close_impl(app: &AppHandle, restore_prev: bool) {
     // 连带挂住鼠标 LL 钩子（光标卡顿）和 WM_HOTKEY 派发（热键唤不起）——这是竞态，
     // 不能靠 sleep/日志延迟掩盖，必须用顺序保证。
     let cfg = inner.cfg.lock().unwrap();
-    let render = Render {
-        visible: false,
-        phase: "programs".into(),
-        title: String::new(),
-        window_order: cfg.window_order.clone(),
-        multi_letter: cfg.multi_letter,
-        theme: cfg.theme.clone(),
-        win_digit_mode: cfg.win_digit_mode.clone(),
-        filter: String::new(),
-        programs: Vec::new(),
-        windows: Vec::new(),
-        page: 1,
-        page_count: 1,
-        win_digit: String::new(),
-    };
+    let render = Render::closed(&cfg);
     drop(cfg);
     let _ = app.emit("overlay", &render);
     // 收尾完成，再在独立线程激活目标（AttachThreadInput 已移除，激活不阻塞主线程；
@@ -480,93 +879,6 @@ fn deferred_activate(_app: &AppHandle, hwnd: isize) {
     std::thread::spawn(move || {
         let _ = windows::activate(hwnd);
     });
-}
-
-// 选中程序层条目：单窗口直切返回 true（调用方负责解锁并 close），多窗口进窗口层，
-// 窗口层中重复选中同一程序则轮询切下一窗口
-fn select_entry(app: &AppHandle, inner: &Inner, ov: &mut OverlayState, entry: &ProgEntry) -> bool {
-    let wins = match ov.wins_by_proc.get(&entry.process) {
-        Some(w) if !w.is_empty() => w,
-        _ => {
-            eprintln!("[winhop] '{}' 无窗口", entry.name);
-            return false;
-        }
-    };
-    let now = windows::now_ms();
-    if ov.phase == Phase::Windows && ov.sel_proc.as_deref() == Some(entry.process.as_str()) {
-        ov.active = (ov.active + 1) % wins.len();
-        ov.last_activated = wins[ov.active].hwnd;
-        inner.mru.lock().unwrap().insert(wins[ov.active].hwnd, now);
-        deferred_activate(app, wins[ov.active].hwnd);
-        eprintln!("[winhop] 轮询 {} 窗口 {}", entry.name, ov.active + 1);
-        emit(app, inner, ov);
-        return false;
-    }
-    if wins.len() == 1 {
-        ov.switched = true;
-        ov.last_activated = wins[0].hwnd;
-        inner.mru.lock().unwrap().insert(wins[0].hwnd, now);
-        inner.pending_activate.store(wins[0].hwnd, Ordering::Relaxed);
-        true
-    } else {
-        ov.phase = Phase::Windows;
-        ov.sel_proc = Some(entry.process.clone());
-        ov.letter_buf.clear();
-        // 排序：mru 按最近使用倒序（1 = 上次用的）；zorder 按窗口句柄序（创建序，稳定）。
-        // Z 序不能做「固定序号」——任何激活都会把窗口提到 Z 顶，等于隐式 MRU
-        let mut wins = wins.clone();
-        if inner.cfg.lock().unwrap().window_order == "mru" {
-            let mru = inner.mru.lock().unwrap();
-            wins.sort_by_key(|w| std::cmp::Reverse(mru.get(&w.hwnd).copied().unwrap_or(0)));
-        } else {
-            wins.sort_by_key(|w| w.hwnd);
-        }
-        ov.wins = wins;
-        ov.active = 0;
-        ov.digit_buf.clear();
-        eprintln!("[winhop] '{}' -> {} 窗口数 {}", entry.key, entry.name, ov.wins.len());
-        emit(app, inner, ov);
-        false
-    }
-}
-
-// 确保 prog_page 是 prog_sel 在当前视图中所在页（视图在多字母模式下会被筛选/重排）
-fn sync_page(ov: &mut OverlayState, multi: bool) {
-    let view = view_indices(ov, multi);
-    if let Some(pos) = view.iter().position(|&i| i == ov.prog_sel) {
-        ov.prog_page = pos / PROG_PAGE_SIZE;
-    }
-}
-
-fn select_by_letter(app: &AppHandle, inner: &Inner, ov: &mut OverlayState, c: char) -> bool {
-    let Some((idx, entry)) = ov
-        .prog_list
-        .iter()
-        .enumerate()
-        .find(|(_, e)| e.key == c.to_string())
-        .map(|(i, e)| (i, e.clone()))
-    else {
-        eprintln!("[winhop] letter '{}' 无对应程序", c);
-        return false;
-    };
-    ov.prog_sel = idx;
-    let multi = inner.cfg.lock().unwrap().multi_letter;
-    sync_page(&mut *ov, multi);
-    select_entry(app, inner, ov, &entry)
-}
-
-fn resolve_window(inner: &Inner, ov: &mut OverlayState, n: usize) -> bool {
-    let total = ov.wins.len();
-    if total == 0 || n < 1 {
-        return false;
-    }
-    let idx = (n - 1).min(total - 1);
-    ov.switched = true;
-    ov.last_activated = ov.wins[idx].hwnd;
-    inner.mru.lock().unwrap().insert(ov.wins[idx].hwnd, windows::now_ms());
-    inner.pending_activate.store(ov.wins[idx].hwnd, Ordering::Relaxed);
-    eprintln!("[winhop] 切换到窗口 {}", idx + 1);
-    true
 }
 
 // webview JS keydown → 状态机。覆盖层夺焦后按键落在覆盖层内部，走这条路径
@@ -648,120 +960,6 @@ fn hotkey_resume(app: AppHandle) -> Result<(), String> {
     eprintln!("[winhop] hotkey_resume {} register={:?}", hk, r);
     r.map_err(|e| format!("恢复热键失败: {}", e))?;
     Ok(())
-}
-
-// ===== 热键录制：Rust 侧轮询 GetAsyncKeyState 检测组合 =====
-// webview 事件会被中文输入法吞掉（Ctrl+Space 的 keydown 被 IME 用于切中英），
-// 物理键状态 GetAsyncKeyState 不受影响——录制改走轮询，绕开事件系统。
-static CAPTURE: std::sync::OnceLock<std::sync::Mutex<Option<String>>> =
-    std::sync::OnceLock::new();
-static CAPTURE_ON: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-
-const VK_MODS: [(i32, &'static str); 6] = [
-    (0x11, "ctrl"),
-    (0xA2, "ctrl"),
-    (0xA3, "ctrl"),
-    (0x12, "alt"),
-    (0x10, "shift"),
-    (0x5B, "super"),
-];
-
-fn mods_down() -> Vec<&'static str> {
-    let mut out: Vec<&'static str> = Vec::new();
-    for (vk, name) in VK_MODS {
-        if unsafe { (windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(vk) as i32 & 0x8000) != 0 }
-            && !out.iter().any(|n| *n == name)
-        {
-            out.push(name);
-        }
-    }
-    // 固定顺序：ctrl alt shift super
-    let order = ["ctrl", "alt", "shift", "super"];
-    out.sort_by_key(|n| order.iter().position(|o| o == n).unwrap_or(99));
-    out
-}
-
-// 主键 vk → 组合串里的键名；None 表示该 vk 是修饰键
-fn vk_key_name(vk: i32) -> Option<String> {
-    match vk {
-        0x20 => Some("space".into()),
-        0x41..=0x5A => Some(((b'a' + (vk - 0x41) as u8) as char).to_string()),
-        0x30..=0x39 => Some(((b'0' + (vk - 0x30) as u8) as char).to_string()),
-        0x70..=0x87 => Some(format!("f{}", vk - 0x70 + 1)),
-        _ => None,
-    }
-}
-
-// 开始检测：后台线程轮询，主键「按下沿」+ 修饰键按住 → 记录组合，一次后停止
-#[tauri::command]
-fn hotkey_capture_start() {
-    use std::sync::atomic::Ordering;
-    use std::collections::HashSet;
-    CAPTURE.get_or_init(|| std::sync::Mutex::new(None));
-    CAPTURE_ON.store(true, Ordering::Relaxed);
-    std::thread::spawn(|| {
-        let mut prev: HashSet<i32> = HashSet::new();
-        let mut prev_mods: Vec<&'static str> = Vec::new();
-        while CAPTURE_ON.load(Ordering::Relaxed) {
-            let mods = mods_down();
-            let mut now: HashSet<i32> = HashSet::new();
-            for vk in 0x41..=0x5A { if key_down(vk) { now.insert(vk); } } // A-Z
-            for vk in 0x30..=0x39 { if key_down(vk) { now.insert(vk); } } // 0-9
-            for vk in 0x70..=0x87 { if key_down(vk) { now.insert(vk); } } // F1-F24
-            if key_down(0x20) { now.insert(0x20); } // Space
-            // 方向 1：主键按下沿（上一轮未按、本轮按下）且修饰键已按住
-            for &vk in now.difference(&prev) {
-                if mods.is_empty() { break; }
-                if capture_hit(&mods, vk) { return; }
-            }
-            // 方向 2：修饰键刚按下（按下沿）且已有主键按住（先按主键/同时按）
-            if !mods.is_empty()
-                && mods.iter().any(|m| !prev_mods.contains(m))
-                && !now.is_empty()
-            {
-                let vk = *now.iter().next().unwrap();
-                if capture_hit(&mods, vk) { return; }
-            }
-            prev = now;
-            prev_mods = mods;
-            std::thread::sleep(std::time::Duration::from_millis(30));
-        }
-    });
-}
-
-// 命中组合：mods + 主键 vk → 记录并停线程；返回 true 表示已命中
-fn capture_hit(mods: &[&'static str], vk: i32) -> bool {
-    if let Some(name) = vk_key_name(vk) {
-        let mut combo = mods.to_vec();
-        combo.push(name.as_str());
-        if let Some(slot) = CAPTURE.get() {
-            *slot.lock().unwrap() = Some(combo.join("+"));
-        }
-        CAPTURE_ON.store(false, std::sync::atomic::Ordering::Relaxed);
-        return true;
-    }
-    false
-}
-
-fn key_down(vk: i32) -> bool {
-    unsafe {
-        (windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(vk) as i32 & 0x8000) != 0
-    }
-}
-
-#[tauri::command]
-fn hotkey_capture_poll() -> Option<String> {
-    CAPTURE.get().and_then(|m| m.lock().unwrap().take())
-}
-
-#[tauri::command]
-fn hotkey_capture_stop() {
-    use std::sync::atomic::Ordering;
-    CAPTURE_ON.store(false, Ordering::Relaxed);
-    if let Some(m) = CAPTURE.get() {
-        *m.lock().unwrap() = None;
-    }
 }
 
 #[tauri::command]
@@ -878,14 +1076,7 @@ fn rebuild_and_emit(app: &AppHandle, inner: &Inner) {
     let mut ov = inner.overlay.lock().unwrap();
     let cfg = inner.cfg.lock().unwrap().clone();
     // 重新枚举，让新屏蔽的程序从 wins_by_proc 中消失
-    let mut wins: HashMap<String, Vec<WinInfo>> = HashMap::new();
-    for w in windows::enum_windows() {
-        if cfg.blocked.iter().any(|b| b.process() == w.process) {
-            continue;
-        }
-        wins.entry(w.process.clone()).or_default().push(w);
-    }
-    ov.wins_by_proc = wins;
+    ov.wins_by_proc = group_windows(&cfg);
     ov.prog_list = build_prog_list(&cfg, &ov.wins_by_proc);
     ov.prog_sel = 0;
     ov.prog_page = 0;
@@ -933,19 +1124,20 @@ fn unblock_program(app: AppHandle, process: String) -> Result<(), String> {
     }
     Ok(())
 }
-// 不能复用 letter 路径）。若该行已高亮则等同 Enter 确认。
+// 鼠标点击程序行：多字母代号可能多字母，统一按 process 选中（不能复用 letter 路径）。
+// 点击已高亮项等同 Enter 确认；否则只移动高亮。
 #[tauri::command]
 fn pick_program(app: AppHandle, process: String) {
     let inner = app.state::<Inner>();
     if !inner.visible.load(Ordering::Relaxed) {
         return;
     }
+    let cfg = inner.cfg.lock().unwrap().clone();
     let mut ov = inner.overlay.lock().unwrap();
     if ov.phase != Phase::Programs || ov.prog_list.is_empty() {
         return;
     }
-    let multi = inner.cfg.lock().unwrap().multi_letter;
-    let view = view_indices(&ov, multi);
+    let view = view_indices(&ov, cfg.multi_letter);
     let Some(pos) = view
         .iter()
         .position(|&i| ov.prog_list[i].process == process)
@@ -953,251 +1145,17 @@ fn pick_program(app: AppHandle, process: String) {
         return;
     };
     let target = view[pos];
-    let entry = ov.prog_list[target].clone();
     // 点击已高亮项 = 确认；否则只移动高亮
-    if target == ov.prog_sel {
-        if select_entry(&app, &inner, &mut ov, &entry) {
-            drop(ov);
-            close(&app);
-        }
+    let eff = if target == ov.prog_sel {
+        let now = windows::now_ms();
+        let mut mru = inner.mru.lock().unwrap();
+        ov.select_indexed(target, &cfg, &mut mru, now)
     } else {
         ov.prog_sel = target;
-        sync_page(&mut ov, multi);
-        emit(&app, &inner, &ov);
-    }
-}
-
-// 当前版本与更新记录（显示在设置页）
-const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
-
-struct ChangelogEntry {
-    version: &'static str,
-    date: &'static str,
-    notes_zh: &'static [&'static str],
-    notes_en: &'static [&'static str],
-}
-
-// 当前版本的更新记录（设置页只显示当前版本，按界面语言取中/英文）
-const CURRENT_CHANGELOG: ChangelogEntry = ChangelogEntry {
-    version: "0.3.1",
-    date: "2026-09",
-    notes_zh: &[
-        "新增开机自启：设置页勾选即可登录 Windows 时自动启动（写入系统启动项）",
-        "新增全局热键录制：设置页点「录制」按下组合键即可，支持 Ctrl+Space（中文输入法下也能录），保存后生效",
-        "字母改为手动配置：不再自动给程序分配字母，未配置的程序显示「·」；✎ 面板里把字母删空保存即可清除绑定",
-        "界面统一：所有按钮改为主题色实心样式、可点与否一目了然，输入框/筛选框统一主题色边框",
-        "程序列表固定卡片高度、每页最多 20 个；长代号（如 settings）完整显示不截断",
-    ],
-    notes_en: &[
-        "Launch at startup: tick it in settings to start WinHop automatically when you sign in to Windows",
-        "Global-hotkey recording: click \"Record\" in settings and press a combo — works even for Ctrl+Space under a Chinese IME; applies on Save",
-        "Letters are now manual only: programs are no longer auto-assigned a letter (unconfigured ones show \"·\"); clear the letter in the ✎ panel and save to unbind",
-        "Unified look: all buttons use a solid theme-color style so clickable vs disabled is obvious; inputs/filter boxes share themed borders",
-        "Fixed-height program cards, up to 20 per page; long codes (e.g. \"settings\") are shown in full without truncation",
-    ],
-};
-
-#[derive(Serialize, Clone)]
-struct SettingsInfo {
-    version: String,
-    hotkey: String,
-    autostart: bool,
-    window_order: String,
-    multi_letter: bool,
-    theme: String,
-    win_digit_mode: String,
-    /// 当前生效语言（cfg.lang 为空则取系统检测值）
-    lang: String,
-    /// 配置里保存的语言（空=跟随系统；用于区分"明确选了 zh-CN"与"跟随系统恰好是中文"）
-    lang_cfg: String,
-    /// 系统检测语言（与用户设置无关，始终是 GetSystemDefault 结果）
-    lang_sys: String,
-    themes: Vec<ThemeUi>,
-    blocked: Vec<BlockedUi>,
-    changelog: ChangelogUi,
-}
-
-#[derive(Serialize, Clone)]
-struct BlockedUi {
-    process: String,
-    note: String,
-}
-
-#[derive(Serialize, Clone)]
-struct ThemeUi {
-    id: String,
-    name: String,
-}
-
-#[derive(Serialize, Clone)]
-struct ChangelogUi {
-    version: String,
-    date: String,
-    notes_zh: Vec<String>,
-    notes_en: Vec<String>,
-}
-
-// 主题 id → 显示名（与前端 styles.css 的 [data-theme=...] 对应）
-fn theme_name(id: &str) -> &'static str {
-    // 调用方只遍历 config::THEMES，未知 id 不会出现；兜底给静态串
-    match id {
-        "black-green" => "黑绿",
-        "black-yellow" => "黑黄",
-        _ => "未知主题",
-    }
-}
-
-// 读取当前设置与版本/更新记录（设置页打开时调用，不立即写盘）
-#[tauri::command]
-fn get_settings(app: AppHandle) -> SettingsInfo {
-    let inner = app.state::<Inner>();
-    let cfg = inner.cfg.lock().unwrap();
-    SettingsInfo {
-        version: APP_VERSION.into(),
-        hotkey: cfg.hotkey.clone(),
-        autostart: cfg.autostart,
-        window_order: cfg.window_order.clone(),
-        multi_letter: cfg.multi_letter,
-        theme: cfg.theme.clone(),
-        win_digit_mode: cfg.win_digit_mode.clone(),
-        // 当前生效语言：配置指定优先，空则跟随系统
-        lang: if cfg.lang.is_empty() {
-            windows::system_lang().to_string()
-        } else {
-            cfg.lang.clone()
-        },
-        lang_cfg: cfg.lang.clone(),
-        lang_sys: windows::system_lang().to_string(),
-        themes: config::THEMES
-            .iter()
-            .map(|id| ThemeUi {
-                id: (*id).into(),
-                name: theme_name(id).into(),
-            })
-            .collect(),
-        blocked: cfg
-            .blocked
-            .iter()
-            .map(|b| BlockedUi {
-                process: b.process().to_string(),
-                note: b.note().to_string(),
-            })
-            .collect(),
-        changelog: ChangelogUi {
-            version: CURRENT_CHANGELOG.version.into(),
-            date: CURRENT_CHANGELOG.date.into(),
-            notes_zh: CURRENT_CHANGELOG.notes_zh.iter().map(|s| s.to_string()).collect(),
-            notes_en: CURRENT_CHANGELOG.notes_en.iter().map(|s| s.to_string()).collect(),
-        },
-    }
-}
-
-#[derive(serde::Deserialize)]
-struct SettingsInput {
-    /// 新全局热键（global-shortcut 串）；设置页打开期间热键已 suspend
-    #[serde(default)]
-    hotkey: String,
-    #[serde(default)]
-    autostart: bool,
-    window_order: String,
-    multi_letter: bool,
-    theme: String,
-    win_digit_mode: String,
-    /// 界面语言（"zh-CN"/"en"；空串=跟随系统，由前端传 system 表达）
-    #[serde(default)]
-    lang: String,
-    /// 设置页保存时黑名单保留的进程名（被解除的不在其中）
-    #[serde(default)]
-    blocked: Vec<String>,
-}
-
-// 批量保存设置（设置页点保存时调用）
-#[tauri::command]
-fn save_settings(app: AppHandle, input: SettingsInput) -> Result<(), String> {
-    if input.window_order != "zorder" && input.window_order != "mru" {
-        return Err(format!("无效的排序方式「{}」", input.window_order));
-    }
-    if !config::THEMES.contains(&input.theme.as_str()) {
-        return Err(format!("无效的主题「{}」", input.theme));
-    }
-    if input.win_digit_mode != "jump" && input.win_digit_mode != "preview" {
-        return Err(format!("无效的数字键行为「{}」", input.win_digit_mode));
-    }
-    // lang：空=跟随系统（前端传 "system" 时归一为空），zh-CN/en 直接存
-    let lang: String = if input.lang == "system" {
-        String::new()
-    } else {
-        input.lang.clone()
+        ov.sync_page(cfg.multi_letter);
+        Effect::Emit
     };
-    if lang != "" && lang != "zh-CN" && lang != "en" {
-        return Err(format!("无效的语言「{}」", input.lang));
-    }
-    // 新热键解析校验（设置页期间热键已 suspend 注销）
-    let new_hotkey = input.hotkey.trim();
-    let new_sc = if new_hotkey.is_empty() {
-        None
-    } else {
-        Some(
-            Shortcut::from_str(new_hotkey)
-                .map_err(|e| format!("热键「{}」无效: {}", new_hotkey, e))?,
-        )
-    };
-    let inner = app.state::<Inner>();
-    let old_hotkey = inner.cfg.lock().unwrap().hotkey.clone();
-    // 先注册新键：失败则回退注册旧键，配置不变更
-    if let Some(sc) = new_sc {
-        if let Err(e) = app.global_shortcut().register(sc) {
-            eprintln!("[winhop] 新热键注册失败 {:?}: {}，回退旧键", new_hotkey, e);
-            if let Ok(old) = Shortcut::from_str(&old_hotkey) {
-                let _ = app.global_shortcut().register(old);
-            }
-            return Err(format!("热键「{}」注册失败（可能被其它程序占用）", new_hotkey));
-        }
-    } else if let Ok(old) = Shortcut::from_str(&old_hotkey) {
-        // 未改热键：恢复注册旧键（suspend 期间被注销）
-        let _ = app.global_shortcut().register(old);
-    }
-    // 开机自启：先落地注册表（HKCU\...\Run），失败则整体不保存（与热键注册同一模式）
-    let old_autostart = inner.cfg.lock().unwrap().autostart;
-    if input.autostart != old_autostart {
-        if let Err(e) = windows::set_autostart(input.autostart) {
-            eprintln!("[winhop] 自启注册表写入失败: {}", e);
-            return Err(format!("设置开机自启失败: {}", e));
-        }
-    }
-    let save_res = {
-        let mut cfg = inner.cfg.lock().unwrap();
-        cfg.window_order = input.window_order.clone();
-        cfg.multi_letter = input.multi_letter;
-        cfg.autostart = input.autostart;
-        cfg.theme = input.theme.clone();
-        cfg.win_digit_mode = input.win_digit_mode.clone();
-        cfg.lang = lang;
-        if new_sc.is_some() {
-            cfg.hotkey = new_hotkey.to_string();
-        }
-        // 黑名单：设置页保存保留列表之外的（被解除的）才移除
-        let keep: HashSet<String> = input.blocked.iter().map(|b| b.to_lowercase()).collect();
-        cfg.blocked.retain(|b| keep.contains(b.process()));
-        config::save(&cfg, &inner.cfg_path)
-    };
-    if let Err(e) = save_res {
-        // 写盘失败（罕见）：回滚热键到旧值
-        if let Ok(old) = Shortcut::from_str(&old_hotkey) {
-            let _ = app.global_shortcut().unregister_all();
-            let _ = app.global_shortcut().register(old);
-        }
-        return Err(format!("保存配置失败: {}", e));
-    }
-    eprintln!(
-        "[t={}] 保存设置 order={} multi_letter={} theme={} hotkey={}",
-        windows::now_ms(),
-        input.window_order,
-        input.multi_letter,
-        input.theme,
-        new_hotkey
-    );
-    Ok(())
+    apply_effect(&app, &*inner, ov, eff);
 }
 
 // 设置页保存关闭后：重新枚举并 emit，让程序列表立即按新设置（模式/黑名单等）刷新
@@ -1209,283 +1167,55 @@ fn refresh_overlay(app: AppHandle) {
     }
 }
 
+// 落地状态机产出的 Effect：Emit 重渲染、Close 收尾激活、ActivateWindow 轮询实时激活。
+// 调用方持有 ov 锁；Close 路径先 drop 再 close（close 会再取 overlay 锁）。
+fn apply_effect(app: &AppHandle, inner: &Inner, ov: std::sync::MutexGuard<'_, OverlayState>, eff: Effect) {
+    match eff {
+        Effect::None => {}
+        Effect::Emit => emit(app, inner, &ov),
+        Effect::ActivateWindow(hwnd) => {
+            eprintln!("[winhop] 轮询激活 hwnd={:#x}", hwnd);
+            deferred_activate(app, hwnd);
+            emit(app, inner, &ov);
+        }
+        Effect::Close => {
+            drop(ov);
+            close(app);
+        }
+    }
+}
+
+// 薄驱动：Hotkey 单独 toggle；其余按键交给纯状态机 transition，再落地 Effect。
 fn handle_key(app: &AppHandle, msg: HookMsg) {
     let inner = app.state::<Inner>();
-    match msg {
-        HookMsg::Hotkey => {
-            if inner.visible.load(Ordering::Relaxed) {
-                close(app);
-            } else {
-                open(app);
-            }
-            return;
+    if matches!(msg, HookMsg::Hotkey) {
+        if inner.visible.load(Ordering::Relaxed) {
+            close(app);
+        } else {
+            open(app);
         }
-        _ => {}
+        return;
     }
     if !inner.visible.load(Ordering::Relaxed) {
         return;
     }
+    let cfg = inner.cfg.lock().unwrap().clone();
     let mut ov = inner.overlay.lock().unwrap();
     eprintln!("[t={}] key {:?} phase={:?}", windows::now_ms(), msg, ov.phase);
-    match msg {
-        HookMsg::ClickOutside => {
-            drop(ov);
-            close(app);
+    let now = windows::now_ms();
+    let overlay_hwnd = windows::get_overlay_hwnd();
+    let eff = {
+        let mut mru = inner.mru.lock().unwrap();
+        ov.transition(&msg, &cfg, &mut mru, now, overlay_hwnd, &windows::overlay_visible)
+    };
+    if eff == Effect::None {
+        // 空格无目标等场景保留诊断日志
+        if matches!(msg, HookMsg::Space) {
+            eprintln!("[winhop] 空格快速跳转：无可切换的上一个窗口");
         }
-        HookMsg::Esc => match ov.phase {
-            Phase::Windows => {
-                ov.phase = Phase::Programs;
-                ov.sel_proc = None;
-                ov.digit_buf.clear();
-                ov.letter_buf.clear();
-                emit(app, &inner, &ov);
-            }
-            Phase::Programs => {
-                if !ov.letter_buf.is_empty() {
-                    // 多字母模式：先清筛选，再 Esc 才关闭
-                    ov.letter_buf.clear();
-                    ov.prog_page = 0;
-                    emit(app, &inner, &ov);
-                } else {
-                    drop(ov);
-                    close(app);
-                }
-            }
-            Phase::Closed => {}
-        },
-        HookMsg::Letter(c) => {
-            let multi = inner.cfg.lock().unwrap().multi_letter;
-            if multi {
-                if ov.phase != Phase::Programs {
-                    return;
-                }
-                ov.letter_buf.push(c);
-                // 选中匹配度最高的（列表第一个）
-                let v = view_indices(&ov, true);
-                ov.prog_sel = v.first().copied().unwrap_or(ov.prog_sel);
-                ov.prog_page = 0;
-                emit(app, &inner, &ov);
-            } else if select_by_letter(app, &inner, &mut ov, c) {
-                drop(ov);
-                close(app);
-            }
-        }
-        HookMsg::Backspace => {
-            if ov.phase == Phase::Programs && !ov.letter_buf.is_empty() {
-                ov.letter_buf.pop();
-                let v = view_indices(&ov, true);
-                if v.contains(&ov.prog_sel) {
-                    // 当前选中仍在结果内则保留
-                } else {
-                    ov.prog_sel = v.first().copied().unwrap_or(ov.prog_sel);
-                }
-                ov.prog_page = 0;
-                emit(app, &inner, &ov);
-            } else if ov.phase == Phase::Windows
-                && inner.cfg.lock().unwrap().multi_letter
-                && ov.wins.len() > 9
-                && !ov.digit_buf.is_empty()
-            {
-                // 多字母模式且窗口 >9（组合编号）：删一位，剩余索引有效则回退聚焦
-                ov.digit_buf.pop();
-                if let Ok(n) = ov.digit_buf.parse::<usize>() {
-                    if n >= 1 && n <= ov.wins.len() {
-                        ov.active = n - 1;
-                    }
-                }
-                emit(app, &inner, &ov);
-            }
-        }
-        HookMsg::Digit(d) => {
-            if ov.phase != Phase::Windows || ov.wins.is_empty() {
-                return;
-            }
-            let (multi, preview_mode) = {
-                let cfg = inner.cfg.lock().unwrap();
-                (cfg.multi_letter, cfg.win_digit_mode == "preview")
-            };
-            let total = ov.wins.len();
-            if !multi {
-                // 单字母模式：数字累积，n*10 > total（再加一位必超总数）立即跳转
-                ov.digit_buf.push(d);
-                if let Ok(n) = ov.digit_buf.parse::<usize>() {
-                    if n >= 1 && n * 10 > total && resolve_window(&inner, &mut ov, n) {
-                        drop(ov);
-                        close(app);
-                    }
-                }
-            } else if total <= 9 {
-                // 窗口 ≤9：每个数字独立，按到即定（无需退格/组合）
-                let n = d.to_digit(10).unwrap_or(0) as usize;
-                if n < 1 || n > total {
-                    return;
-                }
-                ov.digit_buf = n.to_string();
-                if preview_mode {
-                    ov.active = n - 1;
-                    emit(app, &inner, &ov);
-                } else if resolve_window(&inner, &mut ov, n) {
-                    drop(ov);
-                    close(app);
-                }
-            } else {
-                // 窗口 >9：组合编号（1 然后 2 = 12），Backspace 退格
-                ov.digit_buf.push(d);
-                let n = match ov.digit_buf.parse::<usize>() {
-                    Ok(n) => n,
-                    Err(_) => {
-                        ov.digit_buf.pop();
-                        return;
-                    }
-                };
-                if n < 1 || n > total {
-                    ov.digit_buf.pop(); // 超界，忽略本次输入
-                    return;
-                }
-                ov.active = n - 1; // Enter 也可确认当前输入
-                if preview_mode {
-                    emit(app, &inner, &ov);
-                } else if n * 10 > total && resolve_window(&inner, &mut ov, n) {
-                    // 再加一位必超总数 → 立即跳转；否则等下一位或 Enter 确认
-                    drop(ov);
-                    close(app);
-                }
-            }
-        }
-        HookMsg::Hotkey => {}
-        HookMsg::Up | HookMsg::Down => {
-            let delta: isize = if matches!(msg, HookMsg::Up) { -1 } else { 1 };
-            match ov.phase {
-                Phase::Programs if !ov.prog_list.is_empty() => {
-                    let multi = inner.cfg.lock().unwrap().multi_letter;
-                    let view = view_indices(&ov, multi);
-                    if view.is_empty() {
-                        return;
-                    }
-                    let pos = view.iter().position(|&i| i == ov.prog_sel).unwrap_or(0);
-                    let len = view.len() as isize;
-                    let new_pos = ((pos as isize + delta + len) % len) as usize;
-                    ov.prog_sel = view[new_pos];
-                    sync_page(&mut ov, multi);
-                    emit(app, &inner, &ov);
-                }
-                Phase::Windows if !ov.wins.is_empty() => {
-                    let len = ov.wins.len() as isize;
-                    ov.active = ((ov.active as isize + delta + len) % len) as usize;
-                    emit(app, &inner, &ov);
-                }
-                _ => {}
-            }
-        }
-        HookMsg::PageUp | HookMsg::PageDown => {
-            if ov.phase != Phase::Programs || ov.prog_list.is_empty() {
-                return;
-            }
-            let multi = inner.cfg.lock().unwrap().multi_letter;
-            let view = view_indices(&ov, multi);
-            if view.is_empty() {
-                return;
-            }
-            let page_count = view.len().div_ceil(PROG_PAGE_SIZE);
-            let cur = ov.prog_sel / PROG_PAGE_SIZE;
-            let new_page = if matches!(msg, HookMsg::PageDown) {
-                (cur + 1).min(page_count - 1)
-            } else if cur == 0 {
-                0
-            } else {
-                cur - 1
-            };
-            ov.prog_page = new_page;
-            let start = new_page * PROG_PAGE_SIZE;
-            let end = (start + PROG_PAGE_SIZE).min(view.len());
-            let page_items = &view[start..end];
-            // 选中保持在当前页内：超出则夹到页内首/末
-            if !page_items.contains(&ov.prog_sel) {
-                ov.prog_sel = if matches!(msg, HookMsg::PageDown) {
-                    page_items[0]
-                } else {
-                    *page_items.last().unwrap()
-                };
-            }
-            emit(app, &inner, &ov);
-        }
-        HookMsg::Space => {
-            // 快速跳转：呼出后按空格，切到上一个最近使用窗口（两窗口互切，类似 Alt-Tab 瞬切）。
-            // 取 MRU 中可见、非覆盖层的两个最新窗口，切到第二个。
-            if ov.phase != Phase::Programs {
-                return;
-            }
-            let overlay_hwnd = windows::get_overlay_hwnd();
-            let mut recent: Vec<(u64, isize)> = {
-                let mru = inner.mru.lock().unwrap();
-                mru.iter()
-                    .filter(|(&h, _)| h != 0 && h != overlay_hwnd)
-                    .map(|(&h, &ts)| (ts, h))
-                    .collect()
-            };
-            recent.sort_by(|a, b| b.0.cmp(&a.0)); // 时间戳降序
-            // 跳过第一个（当前/最新），取第二个可见的
-            let target = recent
-                .iter()
-                .filter(|(_, h)| windows::overlay_visible(*h))
-                .nth(1)
-                .map(|&(_, h)| h);
-            if let Some(hwnd) = target {
-                ov.switched = true;
-                ov.last_activated = hwnd;
-                inner
-                    .mru
-                    .lock()
-                    .unwrap()
-                    .insert(hwnd, windows::now_ms());
-                inner.pending_activate.store(hwnd, Ordering::Relaxed);
-                drop(ov);
-                close(app);
-            } else {
-                eprintln!("[winhop] 空格快速跳转：无可切换的上一个窗口");
-            }
-        }
-        HookMsg::Jump(n) => {
-            // 点击窗口行：直接跳转（0-based → resolve 用 1-based）
-            if ov.phase == Phase::Windows && resolve_window(&inner, &mut ov, n + 1) {
-                drop(ov);
-                close(app);
-            }
-        }
-        HookMsg::Enter => {
-            let done = match ov.phase {
-                Phase::Programs => {
-                    if ov.prog_list.is_empty() {
-                        false
-                    } else {
-                        let multi = inner.cfg.lock().unwrap().multi_letter;
-                        let view = view_indices(&ov, multi);
-                        if view.is_empty() {
-                            false // 无匹配，Enter 无动作
-                        } else {
-                            // 多字母筛选后 prog_sel 已是匹配最高项；若不在视图内（边界情况）取首项
-                            let idx = if view.contains(&ov.prog_sel) {
-                                ov.prog_sel
-                            } else {
-                                view[0]
-                            };
-                            let entry = ov.prog_list[idx].clone();
-                            select_entry(app, &inner, &mut ov, &entry)
-                        }
-                    }
-                }
-                Phase::Windows => {
-                    let n = ov.active + 1;
-                    resolve_window(&inner, &mut ov, n)
-                }
-                Phase::Closed => false,
-            };
-            if done {
-                drop(ov);
-                close(app);
-            }
-        }
+        return;
     }
+    apply_effect(app, &*inner, ov, eff);
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1533,13 +1263,13 @@ pub fn run() {
         )
         .invoke_handler(tauri::generate_handler![
             key,
-            get_settings,
-            save_settings,
+            settings::get_settings,
+            settings::save_settings,
             hotkey_suspend,
             hotkey_resume,
-            hotkey_capture_start,
-            hotkey_capture_poll,
-            hotkey_capture_stop,
+            hotkey_capture::hotkey_capture_start,
+            hotkey_capture::hotkey_capture_poll,
+            hotkey_capture::hotkey_capture_stop,
             quit_app,
             thumb_set,
             thumb_clear,
@@ -1559,7 +1289,6 @@ pub fn run() {
                 visible: visible.clone(),
                 overlay: Mutex::new(OverlayState::default()),
                 prev_fg: AtomicIsize::new(0),
-                pending_activate: AtomicIsize::new(0),
             });
             let handle = app.handle().clone();
             // 鼠标钩子（点击外部关闭）；键盘走 RegisterHotKey + webview JS keydown
@@ -1672,20 +1401,11 @@ mod state_machine_tests {
         ov
     }
 
-    // 构造仅含给定程序的最小 Config（其余字段默认）
+    // 构造仅含给定程序的最小 Config（其余字段走 Config::default）
     fn cfg_with(programs: Vec<Program>) -> Config {
         Config {
-            hotkey: "ctrl+space".into(),
-            elevate: true,
-            autostart: false,
-            window_order: "zorder".into(),
-            multi_letter: false,
-            theme: "black-green".into(),
-            win_digit_mode: "jump".into(),
-            lang: String::new(),
             programs,
-            blocked: vec![],
-            blocked_seeded: true,
+            ..Config::default()
         }
     }
 
@@ -1745,25 +1465,7 @@ mod state_machine_tests {
 
     #[test]
     fn build_prog_list_does_not_auto_assign_letters() {
-        use config::Config;
-        let cfg = Config {
-            hotkey: "ctrl+space".into(),
-            elevate: true,
-            autostart: false,
-            window_order: "zorder".into(),
-            multi_letter: false,
-            theme: "black-green".into(),
-            win_digit_mode: "jump".into(),
-            lang: String::new(),
-            programs: vec![Program {
-                key: "c".into(),
-                multi_key: String::new(),
-                name: "Chrome".into(),
-                process: "chrome.exe".into(),
-            }],
-            blocked: vec![],
-            blocked_seeded: true,
-        };
+        let cfg = cfg_with(vec![prog("c", "", "Chrome", "chrome.exe")]);
         fn win(proc_: &str) -> WinInfo {
             WinInfo { hwnd: 1, title: String::new(), process: proc_.into(), path: String::new(), monitor: 0 }
         }
@@ -1827,21 +1529,6 @@ mod state_machine_tests {
         let w = &list[0];
         assert_eq!(w.process, "wechat.exe");
         assert_eq!(w.name, "wechat"); // 空路径 → 进程名去 .exe
-    }
-
-    #[test]
-    fn vk_key_name_maps_keys() {
-        // 空格 / 字母 / 数字 / 功能键 → 组合串名；修饰键等返回 None
-        assert_eq!(vk_key_name(0x20).as_deref(), Some("space"));
-        assert_eq!(vk_key_name(0x41).as_deref(), Some("a")); // A
-        assert_eq!(vk_key_name(0x5A).as_deref(), Some("z")); // Z
-        assert_eq!(vk_key_name(0x30).as_deref(), Some("0"));
-        assert_eq!(vk_key_name(0x39).as_deref(), Some("9"));
-        assert_eq!(vk_key_name(0x70).as_deref(), Some("f1"));
-        assert_eq!(vk_key_name(0x87).as_deref(), Some("f24"));
-        // 修饰键（Ctrl 0x11 / Alt 0x12 / Shift 0x10）不作主键
-        assert!(vk_key_name(0x11).is_none());
-        assert!(vk_key_name(0x12).is_none());
     }
 
     #[test]
@@ -1912,5 +1599,199 @@ mod state_machine_tests {
         for w in &wins {
             assert!(w.hwnd != 0);
         }
+    }
+
+    // ===== transition 纯状态机：构造窗口层状态 =====
+    fn wwin(hwnd: isize) -> WinInfo {
+        WinInfo {
+            hwnd,
+            title: format!("w{}", hwnd),
+            process: "chrome.exe".into(),
+            path: String::new(),
+            monitor: 0,
+        }
+    }
+
+    // 窗口层状态：sel_proc=chrome，wins 与 wins_by_proc 已填
+    fn windows_state(wins: Vec<WinInfo>) -> OverlayState {
+        let mut ov = OverlayState::default();
+        ov.phase = Phase::Windows;
+        ov.sel_proc = Some("chrome.exe".into());
+        ov.prog_list = vec![ProgEntry {
+            key: "c".into(),
+            multi_key: "ch".into(),
+            name: "Chrome".into(),
+            process: "chrome.exe".into(),
+            configured: true,
+        }];
+        ov.wins = wins.clone();
+        ov.wins_by_proc.insert("chrome.exe".to_string(), wins);
+        ov
+    }
+
+    // 程序层状态：chrome 单窗口、code 三窗口
+    fn programs_state() -> (OverlayState, Config) {
+        let cfg = cfg_with(vec![
+            prog("c", "ch", "Chrome", "chrome.exe"),
+            prog("v", "vs", "Code", "code.exe"),
+        ]);
+        let mut wins: HashMap<String, Vec<WinInfo>> = HashMap::new();
+        wins.insert("chrome.exe".into(), vec![wwin(100)]);
+        wins.insert(
+            "code.exe".into(),
+            vec![wwin(200), wwin(201), wwin(202)],
+        );
+        let mut ov = OverlayState::default();
+        ov.phase = Phase::Programs;
+        ov.prog_list = build_prog_list(&cfg, &wins);
+        ov.wins_by_proc = wins;
+        (ov, cfg)
+    }
+
+    const VIS: &dyn Fn(isize) -> bool = &|_| true;
+
+    #[test]
+    fn transition_single_letter_single_window_closes_with_pending() {
+        let (mut ov, cfg) = programs_state();
+        let mut mru = HashMap::new();
+        let eff = ov.transition(&HookMsg::Letter('c'), &cfg, &mut mru, 1, 0, VIS);
+        assert_eq!(eff, Effect::Close);
+        assert_eq!(ov.pending, 100); // chrome 单窗口直切
+        assert!(ov.switched);
+    }
+
+    #[test]
+    fn transition_single_letter_multi_window_enters_windows_phase() {
+        let (mut ov, cfg) = programs_state();
+        let mut mru = HashMap::new();
+        let eff = ov.transition(&HookMsg::Letter('v'), &cfg, &mut mru, 1, 0, VIS);
+        assert_eq!(eff, Effect::Emit);
+        assert_eq!(ov.phase, Phase::Windows);
+        assert_eq!(ov.wins.len(), 3);
+        assert_eq!(ov.pending, 0); // 进窗口层，尚未选定
+    }
+
+    #[test]
+    fn transition_windows_phase_poll_cycles_window() {
+        // 窗口层重复按同一程序代号 → 轮询下一窗口，实时激活但不关闭
+        let mut ov = windows_state(vec![wwin(200), wwin(201), wwin(202)]);
+        let cfg = cfg_with(vec![prog("c", "ch", "Chrome", "chrome.exe")]);
+        let mut mru = HashMap::new();
+        let eff = ov.transition(&HookMsg::Letter('c'), &cfg, &mut mru, 1, 0, VIS);
+        assert_eq!(eff, Effect::ActivateWindow(201)); // active 0→1
+        assert_eq!(ov.active, 1);
+        assert_eq!(ov.pending, 0); // 轮询不置 pending
+    }
+
+    #[test]
+    fn transition_digit_single_mode_accumulates_until_overflow() {
+        // 15 个窗口：按 1 不跳（1*10≤15），按 2 → 12 立即跳转第 12 个
+        let wins: Vec<WinInfo> = (100..115).map(wwin).collect();
+        let mut ov = windows_state(wins);
+        let cfg = cfg_with(vec![]); // 单字母 + jump
+        let mut mru = HashMap::new();
+        let e1 = ov.transition(&HookMsg::Digit('1'), &cfg, &mut mru, 1, 0, VIS);
+        assert_eq!(e1, Effect::None);
+        assert_eq!(ov.pending, 0);
+        let e2 = ov.transition(&HookMsg::Digit('2'), &cfg, &mut mru, 2, 0, VIS);
+        assert_eq!(e2, Effect::Close);
+        assert_eq!(ov.pending, 111); // 第 12 个 idx=11 → hwnd 111
+    }
+
+    #[test]
+    fn transition_digit_multi_le9_jump_direct() {
+        let mut ov = windows_state(vec![wwin(200), wwin(201), wwin(202)]);
+        let mut cfg = cfg_with(vec![]);
+        cfg.multi_letter = true;
+        let mut mru = HashMap::new();
+        let eff = ov.transition(&HookMsg::Digit('2'), &cfg, &mut mru, 1, 0, VIS);
+        assert_eq!(eff, Effect::Close);
+        assert_eq!(ov.pending, 201); // 第 2 个 idx=1
+    }
+
+    #[test]
+    fn transition_digit_multi_le9_preview_only_focuses() {
+        let mut ov = windows_state(vec![wwin(200), wwin(201), wwin(202)]);
+        let mut cfg = cfg_with(vec![]);
+        cfg.multi_letter = true;
+        cfg.win_digit_mode = WinDigitMode::Preview;
+        let mut mru = HashMap::new();
+        let eff = ov.transition(&HookMsg::Digit('2'), &cfg, &mut mru, 1, 0, VIS);
+        assert_eq!(eff, Effect::Emit);
+        assert_eq!(ov.active, 1); // 只聚焦
+        assert_eq!(ov.pending, 0); // 不跳转
+    }
+
+    #[test]
+    fn transition_digit_multi_gt9_combo_index() {
+        // 12 个窗口：按 1 不跳，按 2 → 组合 12 跳转；按 3（13 超界）忽略
+        let wins: Vec<WinInfo> = (100..112).map(wwin).collect();
+        let mut ov = windows_state(wins);
+        let mut cfg = cfg_with(vec![]);
+        cfg.multi_letter = true;
+        let mut mru = HashMap::new();
+        assert_eq!(ov.transition(&HookMsg::Digit('1'), &cfg, &mut mru, 1, 0, VIS), Effect::None);
+        assert_eq!(ov.transition(&HookMsg::Digit('3'), &cfg, &mut mru, 2, 0, VIS), Effect::None); // 13>12 弹回
+        assert_eq!(ov.digit_buf, "1");
+        assert_eq!(ov.transition(&HookMsg::Digit('2'), &cfg, &mut mru, 3, 0, VIS), Effect::Close); // 12
+        assert_eq!(ov.pending, 111);
+    }
+
+    #[test]
+    fn transition_esc_windows_back_to_programs_then_close() {
+        let mut ov = windows_state(vec![wwin(200), wwin(201)]);
+        let cfg = cfg_with(vec![]);
+        let mut mru = HashMap::new();
+        assert_eq!(ov.transition(&HookMsg::Esc, &cfg, &mut mru, 1, 0, VIS), Effect::Emit);
+        assert_eq!(ov.phase, Phase::Programs);
+        assert_eq!(ov.sel_proc, None);
+        // 程序层无筛选：Esc 关闭
+        assert_eq!(ov.transition(&HookMsg::Esc, &cfg, &mut mru, 2, 0, VIS), Effect::Close);
+    }
+
+    #[test]
+    fn transition_esc_programs_clears_filter_first() {
+        let (mut ov, mut cfg) = programs_state();
+        cfg.multi_letter = true;
+        let mut mru = HashMap::new();
+        ov.transition(&HookMsg::Letter('v'), &cfg, &mut mru, 1, 0, VIS);
+        assert!(!ov.letter_buf.is_empty());
+        // 第一次 Esc：清筛选不关
+        assert_eq!(ov.transition(&HookMsg::Esc, &cfg, &mut mru, 2, 0, VIS), Effect::Emit);
+        assert!(ov.letter_buf.is_empty());
+        assert_eq!(ov.phase, Phase::Programs);
+        // 第二次 Esc：关闭
+        assert_eq!(ov.transition(&HookMsg::Esc, &cfg, &mut mru, 3, 0, VIS), Effect::Close);
+    }
+
+    #[test]
+    fn transition_enter_programs_single_window_closes() {
+        let (mut ov, cfg) = programs_state();
+        let mut mru = HashMap::new();
+        ov.prog_sel = 0; // 高亮首个（chrome 单窗口）
+        let eff = ov.transition(&HookMsg::Enter, &cfg, &mut mru, 1, 0, VIS);
+        assert_eq!(eff, Effect::Close);
+        assert_eq!(ov.pending, 100);
+    }
+
+    #[test]
+    fn transition_space_jumps_to_second_mru() {
+        let (mut ov, cfg) = programs_state();
+        let mut mru = HashMap::new();
+        mru.insert(200, 20); // 最新（当前窗口）
+        mru.insert(100, 10); // 上一个
+        let eff = ov.transition(&HookMsg::Space, &cfg, &mut mru, 30, 5, VIS); // overlay_hwnd=5
+        assert_eq!(eff, Effect::Close);
+        assert_eq!(ov.pending, 100); // 跳过最新 200，切到 100
+        assert_eq!(mru.get(&100), Some(&30)); // MRU 时间戳刷新
+    }
+
+    #[test]
+    fn transition_space_no_target_is_none() {
+        let (mut ov, cfg) = programs_state();
+        let mut mru = HashMap::new(); // 空 MRU
+        let eff = ov.transition(&HookMsg::Space, &cfg, &mut mru, 1, 0, VIS);
+        assert_eq!(eff, Effect::None);
+        assert_eq!(ov.pending, 0);
     }
 }

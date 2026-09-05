@@ -1,4 +1,85 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+/// 窗口排序：Zorder=按创建顺序（默认，稳定）；Mru=最近使用优先（上次用的排 1）
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum WindowOrder {
+    #[default]
+    Zorder,
+    Mru,
+}
+
+impl WindowOrder {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            WindowOrder::Zorder => "zorder",
+            WindowOrder::Mru => "mru",
+        }
+    }
+    // 解析；非法值回退默认（与历史 validate 行为一致，调用方无需再校验）
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "mru" => WindowOrder::Mru,
+            _ => WindowOrder::Zorder,
+        }
+    }
+}
+
+impl Serialize for WindowOrder {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for WindowOrder {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        let v = WindowOrder::parse(&s);
+        if !s.is_empty() && v.as_str() != s {
+            eprintln!("[winhop] 配置 window_order 无效「{}」，回退为 {}", s, v.as_str());
+        }
+        Ok(v)
+    }
+}
+
+/// 多字母模式窗口层数字键行为：Jump=按数字直接跳转（默认）；Preview=先聚焦预览、Enter 跳转
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum WinDigitMode {
+    #[default]
+    Jump,
+    Preview,
+}
+
+impl WinDigitMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            WinDigitMode::Jump => "jump",
+            WinDigitMode::Preview => "preview",
+        }
+    }
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "preview" => WinDigitMode::Preview,
+            _ => WinDigitMode::Jump,
+        }
+    }
+}
+
+impl Serialize for WinDigitMode {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for WinDigitMode {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        let v = WinDigitMode::parse(&s);
+        if !s.is_empty() && v.as_str() != s {
+            eprintln!("[winhop] 配置 win_digit_mode 无效「{}」，回退为 {}", s, v.as_str());
+        }
+        Ok(v)
+    }
+}
 
 #[derive(Deserialize, Serialize, Clone)]
 pub struct Config {
@@ -8,15 +89,15 @@ pub struct Config {
     /// 开机自启：写注册表 HKCU\...\Run（由 windows::set_autostart 落地，非仅配置项）
     #[serde(default)]
     pub autostart: bool,
-    #[serde(default = "default_window_order")]
-    pub window_order: String,
+    #[serde(default)]
+    pub window_order: WindowOrder,
     #[serde(default)]
     pub multi_letter: bool,
     #[serde(default = "default_theme")]
     pub theme: String,
-    /// 多字母模式窗口层数字键行为："jump" 按数字直接跳转（默认）；"preview" 先聚焦预览、Enter 跳转
-    #[serde(default = "default_win_digit_mode")]
-    pub win_digit_mode: String,
+    /// 多字母模式窗口层数字键行为
+    #[serde(default)]
+    pub win_digit_mode: WinDigitMode,
     /// 界面语言："zh-CN"/"en"，空串为跟随系统（默认）
     #[serde(default)]
     pub lang: String,
@@ -87,16 +168,28 @@ fn default_true() -> bool {
     true
 }
 
-fn default_window_order() -> String {
-    "zorder".into()
-}
-
 fn default_theme() -> String {
     "black-green".into()
 }
 
-fn default_win_digit_mode() -> String {
-    "jump".into()
+// 最小基线默认：标量取各 default_*，programs/blocked 为空、blocked_seeded=true。
+// 首启生成的完整默认配置在此基础上补 default_programs()/default_blocked()（见 load）。
+impl Default for Config {
+    fn default() -> Self {
+        Config {
+            hotkey: "ctrl+space".into(),
+            elevate: true,
+            autostart: false,
+            window_order: WindowOrder::default(),
+            multi_letter: false,
+            theme: default_theme(),
+            win_digit_mode: WinDigitMode::default(),
+            lang: String::new(),
+            programs: Vec::new(),
+            blocked: Vec::new(),
+            blocked_seeded: true,
+        }
+    }
 }
 
 #[derive(Deserialize, Serialize, Clone)]
@@ -251,19 +344,11 @@ pub fn load() -> (Config, std::path::PathBuf) {
             return (cfg, path);
         }
     }
-    // 找不到配置：生成默认配置（常用软件预置别名 + 字母，自动补全补齐其余）
+    // 找不到配置：在最小基线（Config::default）上补预置别名程序与系统黑名单
     let default = Config {
-        hotkey: "ctrl+space".into(),
-        elevate: true,
-        autostart: false,
-        window_order: "zorder".into(),
-        multi_letter: false,
-        theme: default_theme(),
-        win_digit_mode: default_win_digit_mode(),
-        lang: String::new(),
         programs: default_programs(),
         blocked: default_blocked(),
-        blocked_seeded: true,
+        ..Config::default()
     };
     let json = serde_json::to_string_pretty(&default).expect("序列化默认配置失败");
     if let Some(dir) = appdata.as_ref() {
@@ -325,13 +410,7 @@ fn default_programs() -> Vec<Program> {
 pub const THEMES: &[&str] = &["black-green", "black-yellow"];
 
 fn validate(cfg: &mut Config) {
-    if cfg.window_order != "zorder" && cfg.window_order != "mru" {
-        eprintln!(
-            "[winhop] 配置 window_order 无效「{}」，回退为 zorder",
-            cfg.window_order
-        );
-        cfg.window_order = "zorder".into();
-    }
+    // window_order / win_digit_mode 为枚举，反序列化时非法值已回退默认（见其 Deserialize）
     if !THEMES.contains(&cfg.theme.as_str()) {
         eprintln!(
             "[winhop] 配置 theme 无效「{}」，回退为 {}",
@@ -339,13 +418,6 @@ fn validate(cfg: &mut Config) {
             THEMES[0]
         );
         cfg.theme = THEMES[0].into();
-    }
-    if cfg.win_digit_mode != "jump" && cfg.win_digit_mode != "preview" {
-        eprintln!(
-            "[winhop] 配置 win_digit_mode 无效「{}」，回退为 jump",
-            cfg.win_digit_mode
-        );
-        cfg.win_digit_mode = "jump".into();
     }
     // lang：空（跟随系统）/ zh-CN / en，其余归一化为空
     if cfg.lang != "" && cfg.lang != "zh-CN" && cfg.lang != "en" {
@@ -390,19 +462,7 @@ mod tests {
     }
 
     fn minimal_cfg() -> Config {
-        Config {
-            hotkey: "ctrl+space".into(),
-            elevate: true,
-            autostart: false,
-            window_order: "zorder".into(),
-            multi_letter: false,
-            theme: "black-green".into(),
-            win_digit_mode: "jump".into(),
-            lang: String::new(),
-            programs: vec![],
-            blocked: vec![],
-            blocked_seeded: true,
-        }
+        Config::default() // 字段默认即测试基线；加字段无需改这里
     }
 
     #[test]
@@ -417,15 +477,18 @@ mod tests {
 
     #[test]
     fn invalid_enums_fall_back() {
-        let mut cfg = minimal_cfg();
-        cfg.window_order = "bogus".into();
-        cfg.theme = "no-such-theme".into();
-        cfg.win_digit_mode = "bogus".into();
-        cfg.lang = "fr".into();
+        // 枚举字段：非法 JSON 值反序列化即回退默认（window_order→zorder、win_digit_mode→jump）
+        let cfg: Config = serde_json::from_str(
+            r#"{"hotkey":"ctrl+space","programs":[],
+                "window_order":"bogus","win_digit_mode":"bogus","theme":"no-such-theme","lang":"fr"}"#,
+        )
+        .unwrap();
+        assert_eq!(cfg.window_order, WindowOrder::Zorder);
+        assert_eq!(cfg.win_digit_mode, WinDigitMode::Jump);
+        // theme/lang 仍在 validate 中回退
+        let mut cfg = cfg;
         validate(&mut cfg);
-        assert_eq!(cfg.window_order, "zorder");
         assert_eq!(cfg.theme, THEMES[0]);
-        assert_eq!(cfg.win_digit_mode, "jump");
         assert_eq!(cfg.lang, "");
     }
 

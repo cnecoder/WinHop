@@ -17,7 +17,8 @@ jobs:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - name: Rust 单元测试
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+        # --nocapture：让 SKIP 标注（如 Chrome 未装跳过的回归断言）在 Actions 日志里可见
+        run: cargo test --manifest-path src-tauri/Cargo.toml -- --nocapture
       - uses: actions/setup-node@v5
         with:
           node-version: 22

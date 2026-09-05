@@ -6,11 +6,6 @@
 - [ ] **虚拟桌面支持**（低优先级，用户场景少用）：目标窗口在另一任务视图桌面时无法激活——`IVirtualDesktopManager` COM API（先做识别+标记，再考虑自动切桌面）
 - [ ] **`winhop capture` 辅助命令**：CLI 打印当前激活窗口的进程名/标题，方便手写配置（原设计项，现已被「✎ 统一编辑入配置」部分替代，纯手写场景仍有用）
 
-## 已知限制（待解决）
-
-- [ ] **taskmgr 热键复验**：键盘已不走 LL 钩子、热键改走系统级 `RegisterHotKey`，提权后理论上对 taskmgr 等 UIPI 窗口生效，待真机复验；托盘左键始终可兜底
-- [ ] **IME 充分验证**：中文输入法（拼音）开着时选择页按键的完整兼容性测试
-
 ## 体验优化
 
 - [ ] **热键冲突提示**：`RegisterHotKey` 注册失败时已记日志 + 托盘兜底（不再静默/崩溃）；进一步可提示具体占用方
@@ -26,8 +21,8 @@
 ## 已完成（历史记录）
 
 - [x] **开机自启**：设置页勾选 + `autostart` 配置项，落地注册表 `HKCU\...\Run` 的 `WinHop` 值；保存先写注册表（失败整体不保存），启动时以配置为准幂等对齐（v0.3.x）
-- [x] **自动化单元测试**：配置校验/原子保存/序列化（config.rs）、状态机匹配筛选/分页/程序列表排序与名称回退（lib.rs）、程序编辑代号校验与冲突检测（`validate_program_key`/`apply_program_edit`）、热键 vk 映射、`enum_windows` 冒烟不 panic、版本资源（windows.rs），`cargo test` 共 22 项（v0.3.x）
-- [x] **前端纯函数单测**：`src/util.js`（escapeHtml/prettyHotkey 等不依赖 DOM 的逻辑）用 `node --test` 覆盖，新增纯逻辑抽到此文件并加 `*.test.js`
+- [x] **自动化单元测试**：配置校验/原子保存/序列化（config.rs）、纯状态机 `OverlayState::transition` 键位模型（数字累积/组合编号/preview/Esc 两级/字母筛选/翻页/空格 MRU）、匹配筛选/程序列表排序与名称回退、程序编辑代号校验与冲突检测（`validate_program_key`/`apply_program_edit`）、热键 vk 映射、`enum_windows` 冒烟、版本资源（windows.rs，缺目标文件时显式 SKIP 标注），`cargo test` 共 34 项（v0.3.x）
+- [x] **前端纯函数单测**：`src/util.js`（escapeHtml/prettyHotkey/settingsFormEquals/rectPhys/clipRectPhys/winHintKind 等不依赖 DOM 的逻辑）用 `node --test` 覆盖（10 项），新增纯逻辑抽到此文件并加 `*.test.js`
 - [x] **CI**：GitHub Actions（`.github/workflows/ci.yml`）——PR/主分支跑 `cargo test` + 前端 `node --test`/`node --check`；推 `v*` tag 自动构建 NSIS/MSI 并幂等发布 Release（流程见 [release.md](release.md)）
 
 - [x] **日志轮转**：`winhop.log` 超 1MB 轮转 `winhop.log.1`（v0.3.0）

@@ -16,8 +16,10 @@ Windows 窗口快速切换器（Rust + Tauri 2 / WebView2，Windows-only）。�
 
 ## 代码结构
 
-- `src-tauri/src/lib.rs` — 状态机（`handle_key`）、Tauri 命令、配置读写编排、设置页 changelog
-- `src-tauri/src/windows.rs` — Win32：窗口枚举、激活、鼠标 LL 钩子、DWM 缩略图、语言/提权/单实例
+- `src-tauri/src/lib.rs` — 覆盖层状态机（纯函数 `OverlayState::transition` + 薄驱动 `handle_key`/`apply_effect`）、overlay/程序编辑等 Tauri 命令、配置读写编排、builder/托盘装配
+- `src-tauri/src/settings.rs` — 设置页：`get_settings`/`save_settings` 命令、设置 DTO、版本 changelog、热键注册与自启副作用
+- `src-tauri/src/hotkey_capture.rs` — 全局热键录制（`GetAsyncKeyState` 轮询绕开 IME）：start/poll/stop 命令与检测，自包含不依赖状态机
+- `src-tauri/src/windows.rs` — Win32：窗口枚举、激活、鼠标 LL 钩子、DWM 缩略图、语言/提权/单实例/自启注册表
 - `src-tauri/src/config.rs` — `config.json` 结构、加载迁移、校验、**原子保存**
 - `src/main.js` / `i18n.js` / `index.html` / `styles.css` — 覆盖层与设置页前端
 - 配置与日志：`%APPDATA%\WinHop\`（config.json、winhop.log）
@@ -26,11 +28,11 @@ Windows 窗口快速切换器（Rust + Tauri 2 / WebView2，Windows-only）。�
 
 1. **先读后写**：理解意图再改；有多种理解时列出，不擅自选；不确定先问。
 2. **简洁优先、精准修改**：只动必须改的，不顺手重构/格式化相邻代码；注意到无关死代码先提出不擅自删。
-3. **改完自动验证**：`cd src-tauri && cargo test`（22 项：配置校验/序列化、状态机筛选排序/程序列表、代号冲突、热键 vk、枚举冒烟、版本资源）+ 前端 `node --test`（`src/util.js` 纯函数）与 `node --check` 通过 → `cargo build` → 启动 `./target/debug/winhop.exe`（debug 不弹 UAC）→ 查 `winhop.log` 启动正常 → 交给用户实测。**不主动杀用户在跑的实例**（release 提权需提权 taskkill，见 build.md）。CI（`.github/workflows/ci.yml`）在 PR/主分支跑 `cargo test` + 前端 `node --test`/`node --check`，推 `v*` tag 自动打包发布。
+3. **改完自动验证**：`cd src-tauri && cargo test`（34 项：配置校验/序列化、纯状态机 `transition` 键位模型——数字累积/组合编号/preview/Esc 两级/字母筛选/翻页/空格 MRU、筛选排序/程序列表、代号冲突、热键 vk、枚举冒烟、版本资源）+ 前端 `node --test`（`src/util.js` 纯函数）与 `node --check` 通过 → `cargo build` → 启动 `./target/debug/winhop.exe`（debug 不弹 UAC）→ 查 `winhop.log` 启动正常 → 交给用户实测。**不主动杀用户在跑的实例**（release 提权需提权 taskkill，见 build.md）。CI（`.github/workflows/ci.yml`）在 PR/主分支跑 `cargo test` + 前端 `node --test`/`node --check`，推 `v*` tag 自动打包发布。
 4. **用户说「提交」** = `git commit` + `git push -u origin main`；没说不推。
 5. **书面内容主要用中文**；代码、命令、技术术语、API 名保持原文不汉化。
 6. **文档与代码始终一致**：改动行为/架构/配置/命令/流程时，同一提交内同步更新受影响文档（主要是 `docs/design.md`，以及 build/debug/release/TODO/glossary 和 README）。文档描述以当前代码为准；发现文档与实现不符时先对齐再继续，不允许文档滞后。
-7. **改前端样式必须遵守视觉设计系统**（见 [docs/ui-design.md](docs/ui-design.md)，动手前必读）：颜色只用 CSS 变量、不硬编码色值；按钮统一「accent 实心填充 + `--on-accent` 文字，hover `--accent-strong`，不可点才置灰」，不自造描边/多色按钮；输入框 accent 半透明边框、聚焦实心、错误红框；单选/布尔用原生 radio（`accent-color`）不手绘；新主题只加 accent 变量块并在 Rust `config::THEMES`/`theme_name` 登记；动效须被 `prefers-reduced-motion` 覆盖。
+7. **改前端样式必须遵守视觉设计系统**（见 [docs/ui-design.md](docs/ui-design.md)，动手前必读）：颜色只用 CSS 变量、不硬编码色值；按钮统一「accent 实心填充 + `--on-accent` 文字，hover `--accent-strong`，不可点才置灰」，不自造描边/多色按钮；输入框 accent 半透明边框、聚焦实心、错误红框；单选/布尔用原生 radio（`accent-color`）不手绘；新主题只加 accent 变量块，在 Rust `config::THEMES` 登记 id、显示名归前端 i18n（Rust 不硬编码中文名）；动效须被 `prefers-reduced-motion` 覆盖。
 
 ## 高风险红线（踩过的坑）
 

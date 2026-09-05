@@ -7,8 +7,8 @@
 发版前统一改到 `X.Y.Z`：
 
 - `src-tauri/tauri.conf.json` → `"version"`
-- `src-tauri/Cargo.toml` → `version`
-- `src-tauri/src/lib.rs` → `CURRENT_CHANGELOG.version`（设置页「更新记录」显示的版本）
+- `src-tauri/Cargo.toml` → `version`（`Cargo.lock` 的 winhop 条目同步）
+- `src-tauri/src/settings.rs` → `CURRENT_CHANGELOG.version`（设置页「更新记录」显示的版本）
 
 ## 2. 写双语更新记录（两处）
 
@@ -16,7 +16,7 @@ release note 有两个落点，**内容保持一致**：
 
 ### a. 设置页内（app 内显示）
 
-`src-tauri/src/lib.rs` 的 `CURRENT_CHANGELOG`：
+`src-tauri/src/settings.rs` 的 `CURRENT_CHANGELOG`：
 
 ```rust
 const CURRENT_CHANGELOG: ChangelogEntry = ChangelogEntry {
