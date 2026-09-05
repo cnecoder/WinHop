@@ -813,11 +813,6 @@ body {
   flex-shrink: 0;
 }
 
-#hotkey-btn:hover {
-  color: var(--accent);
-  border-color: var(--accent);
-}
-
 .hotkey-hint {
   margin-top: 8px;
   font-size: 12px;

@@ -11,6 +11,7 @@ Windows 窗口快速切换器（Rust + Tauri 2 / WebView2，Windows-only）。�
 | [docs/release.md](docs/release.md) | 版本号三处同步、双语 release note 规范、发布流程 |
 | [docs/TODO.md](docs/TODO.md) | 未完成需求与已知限制（先查这里，避免重复造） |
 | [docs/design.md](docs/design.md) | 设计文档（与当前实现一致）：技术栈、架构、两层键位模型、窗口匹配/激活、配置、输入架构 |
+| [docs/ui-design.md](docs/ui-design.md) | **视觉设计系统与 UI 规则**：颜色/字体/圆角令牌、按钮/输入框/单选/代号徽章/列表组件规则——改前端样式前必读 |
 | [docs/glossary.md](docs/glossary.md) | 术语（覆盖层、前台锁定等） |
 
 ## 代码结构
@@ -29,6 +30,7 @@ Windows 窗口快速切换器（Rust + Tauri 2 / WebView2，Windows-only）。�
 4. **用户说「提交」** = `git commit` + `git push -u origin main`；没说不推。
 5. **书面内容主要用中文**；代码、命令、技术术语、API 名保持原文不汉化。
 6. **文档与代码始终一致**：改动行为/架构/配置/命令/流程时，同一提交内同步更新受影响文档（主要是 `docs/design.md`，以及 build/debug/release/TODO/glossary 和 README）。文档描述以当前代码为准；发现文档与实现不符时先对齐再继续，不允许文档滞后。
+7. **改前端样式必须遵守视觉设计系统**（见 [docs/ui-design.md](docs/ui-design.md)，动手前必读）：颜色只用 CSS 变量、不硬编码色值；按钮统一「accent 实心填充 + `--on-accent` 文字，hover `--accent-strong`，不可点才置灰」，不自造描边/多色按钮；输入框 accent 半透明边框、聚焦实心、错误红框；单选/布尔用原生 radio（`accent-color`）不手绘；新主题只加 accent 变量块并在 Rust `config::THEMES`/`theme_name` 登记；动效须被 `prefers-reduced-motion` 覆盖。
 
 ## 高风险红线（踩过的坑）
 
