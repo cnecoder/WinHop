@@ -280,14 +280,18 @@ fn build_prog_list(
     autos.sort();
     for proc in autos {
         let path = wins_by_proc.get(proc).and_then(|wins| wins.first()).map(|w| w.path.clone());
+        // 取 exe 文件名去 .exe 作为回退名；路径缺失/为空时回退到进程名
         let stem = path
             .as_deref()
+            .filter(|p| !p.is_empty())
             .and_then(|p| p.rsplit('\\').next())
-            .unwrap_or(proc)
-            .trim_end_matches(".exe")
+            .map(|s| s.trim_end_matches(".exe"))
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| proc.trim_end_matches(".exe"))
             .to_string();
         let name = path
             .as_deref()
+            .filter(|p| !p.is_empty())
             .and_then(windows::file_description)
             .unwrap_or(stem);
         list.push(ProgEntry {
@@ -768,6 +772,74 @@ fn quit_app(app: AppHandle) {
 
 // 编辑程序（已配置改代号/名称；未配置添加进配置）。按 process 匹配。
 // multi=true 时写 multi_key（多字母代号，1+ 小写字母），否则写 key（单字母）。
+// 代号格式校验：空=清除字母绑定（单字母模式允许，表示解绑）；非空必须全小写，
+// 单字母模式非空时必须恰 1 个字母。
+fn validate_program_key(key: &str, multi: bool) -> Result<(), String> {
+    if !key.is_empty() && !key.bytes().all(|b| b.is_ascii_lowercase()) {
+        return Err("代号必须全为小写字母".into());
+    }
+    if !multi && !key.is_empty() && key.len() != 1 {
+        return Err("单字母模式代号必须是单个字母".into());
+    }
+    Ok(())
+}
+
+// 纯逻辑：把一次程序编辑应用到 cfg（已存在则更新、否则新增），含代号占用冲突检测。
+// 调用方负责 name 非空、代号格式校验与落盘。空 key 不查重（空键不占字母）。
+fn apply_program_edit(
+    cfg: &mut Config,
+    process: &str,
+    key: &str,
+    multi: bool,
+    name: &str,
+) -> Result<(), String> {
+    if let Some(idx) = cfg.programs.iter().position(|p| p.process == process) {
+        if multi {
+            if !key.is_empty() {
+                let conflict = cfg
+                    .programs
+                    .iter()
+                    .enumerate()
+                    .any(|(j, p)| j != idx && p.multi_key == key);
+                if conflict {
+                    return Err(format!("多字母代号「{}」已被占用", key));
+                }
+            }
+            cfg.programs[idx].multi_key = key.to_string();
+        } else {
+            if !key.is_empty() {
+                let conflict = cfg
+                    .programs
+                    .iter()
+                    .enumerate()
+                    .any(|(j, p)| j != idx && p.key == key);
+                if conflict {
+                    return Err(format!("字母「{}」已被占用", key));
+                }
+            }
+            cfg.programs[idx].key = key.to_string();
+        }
+        cfg.programs[idx].name = name.to_string();
+    } else {
+        // 新增：另一模式的代号留空
+        let conflict = if multi {
+            !key.is_empty() && cfg.programs.iter().any(|p| p.multi_key == key)
+        } else {
+            !key.is_empty() && cfg.programs.iter().any(|p| p.key == key)
+        };
+        if conflict {
+            return Err(format!("代号「{}」已被占用", key));
+        }
+        cfg.programs.push(Program {
+            key: if multi { String::new() } else { key.to_string() },
+            multi_key: if multi { key.to_string() } else { String::new() },
+            name: name.to_string(),
+            process: process.to_string(),
+        });
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn edit_program(
     app: AppHandle,
@@ -780,61 +852,11 @@ fn edit_program(
     if name.is_empty() {
         return Err("名称不能为空".into());
     }
-    // 代号非空则必须全小写；单字母模式非空时必须恰 1 个字母（空=清除字母绑定，仅改名/保留条目）
-    if !key.is_empty() && !key.bytes().all(|b| b.is_ascii_lowercase()) {
-        return Err("代号必须全为小写字母".into());
-    }
-    if !multi && !key.is_empty() && key.len() != 1 {
-        return Err("单字母模式代号必须是单个字母".into());
-    }
+    validate_program_key(&key, multi)?;
     let inner = app.state::<Inner>();
     {
         let mut cfg = inner.cfg.lock().unwrap();
-        if let Some(idx) = cfg.programs.iter().position(|p| p.process == process) {
-            if multi {
-                if !key.is_empty() {
-                    let conflict = cfg
-                        .programs
-                        .iter()
-                        .enumerate()
-                        .any(|(j, p)| j != idx && p.multi_key == key);
-                    if conflict {
-                        return Err(format!("多字母代号「{}」已被占用", key));
-                    }
-                }
-                cfg.programs[idx].multi_key = key.clone();
-            } else {
-                // 空键=清除字母，不查重（空键程序不占字母）
-                if !key.is_empty() {
-                    let conflict = cfg
-                        .programs
-                        .iter()
-                        .enumerate()
-                        .any(|(j, p)| j != idx && p.key == key);
-                    if conflict {
-                        return Err(format!("字母「{}」已被占用", key));
-                    }
-                }
-                cfg.programs[idx].key = key.clone();
-            }
-            cfg.programs[idx].name = name.to_string();
-        } else {
-            // 新增：另一模式的代号留空
-            let conflict = if multi {
-                !key.is_empty() && cfg.programs.iter().any(|p| p.multi_key == key)
-            } else {
-                !key.is_empty() && cfg.programs.iter().any(|p| p.key == key)
-            };
-            if conflict {
-                return Err(format!("代号「{}」已被占用", key));
-            }
-            cfg.programs.push(Program {
-                key: if multi { String::new() } else { key.clone() },
-                multi_key: if multi { key.clone() } else { String::new() },
-                name: name.to_string(),
-                process: process.clone(),
-            });
-        }
+        apply_program_edit(&mut cfg, &process, &key, multi, name)?;
         config::save(&cfg, &inner.cfg_path).map_err(|e| format!("保存配置失败: {}", e))?;
     }
     eprintln!(
@@ -1650,6 +1672,36 @@ mod state_machine_tests {
         ov
     }
 
+    // 构造仅含给定程序的最小 Config（其余字段默认）
+    fn cfg_with(programs: Vec<Program>) -> Config {
+        Config {
+            hotkey: "ctrl+space".into(),
+            elevate: true,
+            autostart: false,
+            window_order: "zorder".into(),
+            multi_letter: false,
+            theme: "black-green".into(),
+            win_digit_mode: "jump".into(),
+            lang: String::new(),
+            programs,
+            blocked: vec![],
+            blocked_seeded: true,
+        }
+    }
+
+    fn prog(key: &str, mk: &str, name: &str, proc_: &str) -> Program {
+        Program {
+            key: key.into(),
+            multi_key: mk.into(),
+            name: name.into(),
+            process: proc_.into(),
+        }
+    }
+
+    fn win(proc_: &str, path: &str) -> WinInfo {
+        WinInfo { hwnd: 1, title: String::new(), process: proc_.into(), path: path.into(), monitor: 0 }
+    }
+
     #[test]
     fn match_score_prefers_multi_key_then_name() {
         let e = entry("v", "vs", "VS Code", "code.exe");
@@ -1740,5 +1792,125 @@ mod state_machine_tests {
         let page_count = n.div_ceil(PROG_PAGE_SIZE);
         assert_eq!(page_count, 3);
         assert_eq!(PROG_PAGE_SIZE, 20);
+    }
+
+    #[test]
+    fn build_prog_list_sorts_not_running_last_and_appends_unconfigured() {
+        // 配置项：chrome 运行、notepad 未运行 → notepad 排最后；未配置运行中 mspaint 追加。
+        //（blocked 由调用方在枚举时过滤，不进 wins_by_proc，故 build_prog_list 不负责）
+        let cfg = cfg_with(vec![
+            prog("c", "", "Chrome", "chrome.exe"),
+            prog("n", "", "记事本", "notepad.exe"),
+        ]);
+        let mut wins: HashMap<String, Vec<WinInfo>> = HashMap::new();
+        wins.insert("chrome.exe".into(), vec![win("chrome.exe", "C:\\chrome.exe")]);
+        wins.insert("mspaint.exe".into(), vec![win("mspaint.exe", "C:\\mspaint.exe")]);
+        let list = build_prog_list(&cfg, &wins);
+        let procs: Vec<&str> = list.iter().map(|e| e.process.as_str()).collect();
+        // notepad（未运行配置项）排最后；运行中的 chrome、mspaint 在前
+        assert_eq!(*procs.last().unwrap(), "notepad.exe");
+        assert!(procs.contains(&"mspaint.exe"));
+        assert!(procs.contains(&"chrome.exe"));
+        // 未配置运行中项
+        let paint = list.iter().find(|e| e.process == "mspaint.exe").unwrap();
+        assert!(!paint.configured);
+        assert!(paint.key.is_empty());
+    }
+
+    #[test]
+    fn build_prog_list_unconfigured_uses_fallback_name_without_path() {
+        // 无路径（枚举拿不到 exe）时名称回退进程名去 .exe，不 panic
+        let cfg = cfg_with(vec![]);
+        let mut wins: HashMap<String, Vec<WinInfo>> = HashMap::new();
+        wins.insert("wechat.exe".into(), vec![win("wechat.exe", "")]);
+        let list = build_prog_list(&cfg, &wins);
+        let w = &list[0];
+        assert_eq!(w.process, "wechat.exe");
+        assert_eq!(w.name, "wechat"); // 空路径 → 进程名去 .exe
+    }
+
+    #[test]
+    fn vk_key_name_maps_keys() {
+        // 空格 / 字母 / 数字 / 功能键 → 组合串名；修饰键等返回 None
+        assert_eq!(vk_key_name(0x20).as_deref(), Some("space"));
+        assert_eq!(vk_key_name(0x41).as_deref(), Some("a")); // A
+        assert_eq!(vk_key_name(0x5A).as_deref(), Some("z")); // Z
+        assert_eq!(vk_key_name(0x30).as_deref(), Some("0"));
+        assert_eq!(vk_key_name(0x39).as_deref(), Some("9"));
+        assert_eq!(vk_key_name(0x70).as_deref(), Some("f1"));
+        assert_eq!(vk_key_name(0x87).as_deref(), Some("f24"));
+        // 修饰键（Ctrl 0x11 / Alt 0x12 / Shift 0x10）不作主键
+        assert!(vk_key_name(0x11).is_none());
+        assert!(vk_key_name(0x12).is_none());
+    }
+
+    #[test]
+    fn validate_program_key_rules() {
+        // 空键合法（清除字母绑定），单字母/多字母模式都允许
+        assert!(validate_program_key("", false).is_ok());
+        assert!(validate_program_key("", true).is_ok());
+        // 单字母模式：非空必须恰 1 个小写字母
+        assert!(validate_program_key("c", false).is_ok());
+        assert!(validate_program_key("ch", false).is_err());
+        assert!(validate_program_key("C", false).is_err());
+        // 多字母模式：1+ 小写字母
+        assert!(validate_program_key("ch", true).is_ok());
+        assert!(validate_program_key("CH", true).is_err());
+        assert!(validate_program_key("c1", true).is_err());
+    }
+
+    #[test]
+    fn apply_program_edit_detects_conflict_and_clears() {
+        // 初始：chrome=c, code=v
+        let mut cfg = cfg_with(vec![
+            prog("c", "ch", "Chrome", "chrome.exe"),
+            prog("v", "vs", "Code", "code.exe"),
+        ]);
+        // 单字母改键：占用 v → 报错
+        assert!(apply_program_edit(&mut cfg, "chrome.exe", "v", false, "Chrome").is_err());
+        // 改成空闲字母 a → 成功
+        assert!(apply_program_edit(&mut cfg, "chrome.exe", "a", false, "Chrome").is_ok());
+        assert_eq!(cfg.programs[0].key, "a");
+        // 空键 = 清除字母（不查重），条目保留
+        assert!(apply_program_edit(&mut cfg, "chrome.exe", "", false, "Chrome").is_ok());
+        assert_eq!(cfg.programs[0].key, "");
+        assert_eq!(cfg.programs.len(), 2);
+        // 多字母代号冲突（vs 被 code 占）
+        assert!(apply_program_edit(&mut cfg, "chrome.exe", "vs", true, "Chrome").is_err());
+        // 新增程序：v 被 code 占 → 报错；f 空闲 → 成功
+        assert!(apply_program_edit(&mut cfg, "firefox.exe", "v", false, "Firefox").is_err());
+        assert!(apply_program_edit(&mut cfg, "firefox.exe", "f", false, "Firefox").is_ok());
+        assert_eq!(cfg.programs.len(), 3);
+        assert_eq!(cfg.programs[2].process, "firefox.exe");
+        assert_eq!(cfg.programs[2].key, "f");
+        assert_eq!(cfg.programs[2].multi_key, ""); // 单字母新增，多字母留空
+    }
+
+    #[test]
+    fn default_config_roundtrips_and_invalid_hotkey_falls_back() {
+        // autostart 等新字段序列化往返不丢
+        let mut cfg = cfg_with(vec![prog("c", "ch", "Chrome", "chrome.exe")]);
+        cfg.autostart = true;
+        let dir = std::env::temp_dir().join(format!("winhop_cfg_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.json");
+        config::save(&cfg, &path).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let back: Config = serde_json::from_str(&text).unwrap();
+        assert!(back.autostart);
+        // 无效热键字符串不影响解析（回退逻辑在 run()，这里仅确认 Shortcut::from_str 报错而非 panic）
+        assert!(Shortcut::from_str("not-a-valid-combo!!!").is_err());
+        assert!(Shortcut::from_str("ctrl+space").is_ok());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn enum_windows_does_not_panic() {
+        // 冒烟：窗口枚举在测试环境（可能无交互桌面/为空）也不得 panic
+        let wins = windows::enum_windows();
+        // 每条结果都应有进程名或标题；仅断言不 panic 与基本不变量
+        for w in &wins {
+            assert!(w.hwnd != 0);
+        }
     }
 }
