@@ -14,13 +14,13 @@ jobs:
     name: 测试（Rust 单测 + 前端语法）
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - name: Rust 单元测试
         run: cargo test --manifest-path src-tauri/Cargo.toml
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: 22
       - name: 前端 JS 语法检查
         run: node --check src/main.js && node --check src/i18n.js
 
@@ -30,10 +30,10 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: 22
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
@@ -41,12 +41,16 @@ jobs:
         run: npm ci
       - name: 构建安装包（NSIS + MSI）
         run: npm run tauri build
-      - name: 创建 GitHub Release 并上传安装包
+      - name: 创建或更新 GitHub Release 并上传安装包
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $ver = $env:GITHUB_REF_NAME
-          gh release create $ver `
-            "src-tauri/target/release/bundle/nsis/WinHop_${ver#v}_x64-setup.exe" `
-            "src-tauri/target/release/bundle/msi/WinHop_${ver#v}_x64_en-US.msi" `
-            --title "WinHop $ver" --generate-notes
+          $nsis = "src-tauri/target/release/bundle/nsis/WinHop_${ver#v}_x64-setup.exe"
+          $msi = "src-tauri/target/release/bundle/msi/WinHop_${ver#v}_x64_en-US.msi"
+          # 幂等：release 已存在（如手动先发了双语 note）则只覆盖资产、不动正文；否则新建
+          if (gh release view $ver 2>$null) {
+            gh release upload $ver $nsis $msi --clobber
+          } else {
+            gh release create $ver $nsis $msi --title "WinHop $ver" --generate-notes
+          }

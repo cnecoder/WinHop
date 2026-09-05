@@ -97,13 +97,15 @@ src-tauri/target/release/bundle/msi/WinHop_X.Y.Z_x64_en-US.msi    ← MSI
 ### 方式 A：CI 自动发布（推荐）
 
 推 `vX.Y.Z` tag 即触发 GitHub Actions（`.github/workflows/ci.yml`）：先跑测试，
-再 `npm run tauri build`，自动建 Release 并上传 NSIS/MSI（note 用 `--generate-notes`
-从 commit 自动生成）。双语 note 发布后在 Release 页编辑补上（或手动粘贴按第 3 节模板写的内容）。
+再 `npm run tauri build`，然后**幂等**发布——Release 不存在则 `gh release create`（note 用
+`--generate-notes`），已存在则 `gh release upload --clobber` 只覆盖安装包、**不动正文**。
+因此可先手动 `gh release create` 带上双语 note（方式 B），CI 构建完会把安装包补传到该 Release
+而不覆盖 note；或等 CI 建完再在 Release 页编辑补双语 note。
 
 ```bash
 git tag -a vX.Y.Z -m "WinHop vX.Y.Z"
 git push origin vX.Y.Z
-# 到 Actions 页看构建；完成后 Release 自动出现
+# 到 Actions 页看构建；完成后 Release 自动出现/更新
 ```
 
 ### 方式 B：本机手动
