@@ -6,8 +6,9 @@ use windows_sys::Win32::Foundation::{
     RECT, WPARAM, ERROR_ALREADY_EXISTS, ERROR_FILE_NOT_FOUND, GetLastError,
 };
 use windows_sys::Win32::Graphics::Dwm::{
-    DwmRegisterThumbnail, DwmUnregisterThumbnail, DwmUpdateThumbnailProperties,
-    DWM_THUMBNAIL_PROPERTIES, DWM_TNP_RECTDESTINATION, DWM_TNP_RECTSOURCE, DWM_TNP_VISIBLE,
+    DwmGetWindowAttribute, DwmRegisterThumbnail, DwmUnregisterThumbnail,
+    DwmUpdateThumbnailProperties, DWM_THUMBNAIL_PROPERTIES, DWM_TNP_RECTDESTINATION,
+    DWM_TNP_RECTSOURCE, DWM_TNP_VISIBLE, DWMWA_CLOAKED,
 };
 use windows_sys::Win32::Graphics::Gdi::{
     ClientToScreen, EnumDisplayMonitors, GetMonitorInfoW, MonitorFromWindow, MONITORINFO,
@@ -34,9 +35,9 @@ use windows_sys::Win32::Globalization::{
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     BringWindowToTop, CallNextHookEx, EnumWindows, GetClassNameW, GetClientRect,
-    GetForegroundWindow,
-    GetWindowPlacement, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, IsIconic,
-    IsWindow, IsWindowVisible, MSLLHOOKSTRUCT, SetForegroundWindow, SetWindowsHookExW,
+    GetForegroundWindow, GetWindowLongW, GetWindowPlacement, GetWindowRect, GetWindowTextW,
+    GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, MSLLHOOKSTRUCT,
+    SetForegroundWindow, SetWindowsHookExW, WS_EX_TOOLWINDOW, GWL_EXSTYLE,
     ShowWindow, SM_CYCAPTION, SM_CXPADDEDBORDER, SM_CXSIZEFRAME, SM_CYSIZEFRAME,
     SPIF_SENDCHANGE, SPI_GETFOREGROUNDLOCKTIMEOUT, SPI_SETFOREGROUNDLOCKTIMEOUT,
     SystemParametersInfoW, SW_RESTORE, WINDOWPLACEMENT, WM_LBUTTONDOWN, WM_MBUTTONDOWN,
@@ -176,14 +177,38 @@ pub fn enum_windows() -> Vec<WinInfo> {
     ctx.out
 }
 
+// DWM cloaked 判定：挂起的 UWP/后台应用、其它虚拟桌面的窗口，DWM 会标记为 cloaked。
+// 这类窗口 IsWindowVisible 仍为真、也有标题，但实际上不可见、无法激活（cc-switch、
+// MobaXterm 等会多出一个「打不开的窗口」多属此类）。非 0 即 cloaked。
+fn is_cloaked(hwnd: HWND) -> bool {
+    let mut cloaked: u32 = 0;
+    unsafe {
+        DwmGetWindowAttribute(
+            hwnd,
+            DWMWA_CLOAKED as u32,
+            &mut cloaked as *mut u32 as *mut c_void,
+            std::mem::size_of::<u32>() as u32,
+        ) == 0
+            && cloaked != 0
+    }
+}
+
 unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
     if IsWindowVisible(hwnd) == 0 {
         return 1;
+    }
+    if is_cloaked(hwnd) {
+        return 1; // 挂起/后台/其它虚拟桌面的幽灵窗口：激活不了，排除
     }
     let mut own_pid: u32 = 0;
     GetWindowThreadProcessId(hwnd, &mut own_pid);
     if own_pid != 0 && own_pid == GetCurrentProcessId() {
         return 1; // 排除自身（覆盖层）
+    }
+    // 工具窗口（WS_EX_TOOLWINDOW）不进 Alt-Tab/Win+Tab，多为辅助弹窗，排除（与系统切换器一致）
+    let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+    if ex_style & WS_EX_TOOLWINDOW != 0 {
+        return 1;
     }
     let mut class = [0u16; 256];
     let len = GetClassNameW(hwnd, class.as_mut_ptr(), class.len() as i32);

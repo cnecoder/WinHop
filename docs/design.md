@@ -69,7 +69,7 @@ WebView JS keydown ─invoke("key")─┘        (lib.rs)                       
 
 ### 枚举与过滤（`enum_windows`）
 
-`EnumWindows` 遍历，仅计入：`IsWindowVisible` 可见、非自身进程、非桌面（`Progman`）/任务栏（`Shell_TrayWnd`）、有标题。每个窗口取进程名（`QueryFullProcessImageNameW`，小写 exe 名）、完整路径、文件说明（版本资源 `FileDescription`，作为显示名）、所在屏幕。
+`EnumWindows` 遍历，仅计入：`IsWindowVisible` 可见、**非 DWM cloaked**（`DwmGetWindowAttribute(DWMWA_CLOAKED)`——挂起 UWP/后台、其它虚拟桌面的幽灵窗口，可见标记为真但激活不了）、**非 `WS_EX_TOOLWINDOW`**（不进 Alt-Tab 的工具/弹窗，与系统切换器口径一致）、非自身进程、非桌面（`Progman`）/任务栏（`Shell_TrayWnd`）、有标题。每个窗口取进程名（`QueryFullProcessImageNameW`，小写 exe 名）、完整路径、文件说明（版本资源 `FileDescription`，作为显示名）、所在屏幕。
 **黑名单**（`blocked`）命中的进程不计入：系统预置项来自 `system-blocklist.txt`（首次播种一次，`blocked_seeded` 标记后完全交给用户），用户可经 ✎ 编辑面板屏蔽或设置页解除。
 
 ### 匹配
