@@ -957,25 +957,21 @@ struct ChangelogEntry {
 
 // 当前版本的更新记录（设置页只显示当前版本，按界面语言取中/英文）
 const CURRENT_CHANGELOG: ChangelogEntry = ChangelogEntry {
-    version: "0.3.0",
-    date: "2026-08",
+    version: "0.3.1",
+    date: "2026-09",
     notes_zh: &[
-        "修复切换窗口后键盘输入混乱：移除 Alt 按键注入、改用前台锁超时激活，彻底解决前台程序 Alt 卡死导致所有按键变成 Alt 组合",
-        "界面中英双语：默认跟随系统语言，设置页可手动切换并持久化",
-        "新增黑名单：可屏蔽不常用程序（✎ 编辑面板或设置页管理）",
-        "窗口层数字键新增「先聚焦预览」模式：按数字高亮预览、回车确认切换（设置页可选）",
-        "窗口缩略图改用 DWM 实时合成：被选择页遮挡、窗口最小化时也能清晰预览",
-        "修复空格快速跳转偶尔切错窗口",
-        "修复覆盖层打开时热键 / Alt+Tab 的焦点竞态，鼠标钩子不再干扰其它程序",
+        "新增开机自启：设置页勾选即可登录 Windows 时自动启动（写入系统启动项）",
+        "新增全局热键录制：设置页点「录制」按下组合键即可，支持 Ctrl+Space（中文输入法下也能录），保存后生效",
+        "字母改为手动配置：不再自动给程序分配字母，未配置的程序显示「·」；✎ 面板里把字母删空保存即可清除绑定",
+        "界面统一：所有按钮改为主题色实心样式、可点与否一目了然，输入框/筛选框统一主题色边框",
+        "程序列表固定卡片高度、每页最多 20 个；长代号（如 settings）完整显示不截断",
     ],
     notes_en: &[
-        "Fix garbled keyboard input after switching: removed synthetic Alt injection (it could leave Alt stuck in the foreground app, turning every key into an Alt combo); activation now uses the foreground-lock timeout",
-        "Bilingual UI (Chinese/English): follows the system language by default, manually switchable in settings",
-        "Blocklist: hide programs you don't need (via the ✎ edit panel or the settings page)",
-        "New window-layer digit mode: press a digit to highlight/preview, Enter to switch (configurable in settings)",
-        "Window thumbnails now use live DWM composition: clear previews even when covered by the picker or minimized",
-        "Fix Space quick-jump sometimes targeting the wrong window",
-        "Fix focus races with the hotkey / Alt+Tab while the picker is open; the mouse hook no longer interferes with other apps",
+        "Launch at startup: tick it in settings to start WinHop automatically when you sign in to Windows",
+        "Global-hotkey recording: click \"Record\" in settings and press a combo — works even for Ctrl+Space under a Chinese IME; applies on Save",
+        "Letters are now manual only: programs are no longer auto-assigned a letter (unconfigured ones show \"·\"); clear the letter in the ✎ panel and save to unbind",
+        "Unified look: all buttons use a solid theme-color style so clickable vs disabled is obvious; inputs/filter boxes share themed borders",
+        "Fixed-height program cards, up to 20 per page; long codes (e.g. \"settings\") are shown in full without truncation",
     ],
 };
 
