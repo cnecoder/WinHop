@@ -1,4 +1,5 @@
 import { setLang, t, isEn, applyStaticI18n } from "./i18n.js";
+import { escapeHtml, prettyHotkey } from "./util.js";
 
 const { listen } = window.__TAURI__.event;
 const { invoke } = window.__TAURI__.core;
@@ -29,14 +30,6 @@ function applyLanguage(choice) {
   if (typeof state === "object" && state) {
     render(state); // 覆盖层动态文案（settingsOpen=true 时 render 内部早退，需先关设置页）
   }
-}
-
-function escapeHtml(s) {
-  return s.replace(
-    /[&<>"']/g,
-    (c) =>
-      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])
-  );
 }
 
 // 应用主题：写到 <html data-theme>，CSS 变量块据此切换
@@ -253,15 +246,6 @@ const hotkeyBtn = document.getElementById("hotkey-btn");
 let hkListening = false;
 let hkPollTimer = null;
 let formHotkey = ""; // 设置页内暂存的热键（未保存）
-
-// global-shortcut 串 → 展示文本（ctrl+space → Ctrl + Space）
-function prettyHotkey(hk) {
-  const name = { ctrl: "Ctrl", alt: "Alt", shift: "Shift", super: "Win", space: "Space" };
-  return hk
-    .split("+")
-    .map((k) => name[k] || (k.length === 1 ? k.toUpperCase() : k[0].toUpperCase() + k.slice(1)))
-    .join(" + ");
-}
 
 function renderHotkey() {
   hotkeyDisplay.classList.toggle("listening", hkListening);

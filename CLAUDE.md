@@ -26,7 +26,7 @@ Windows 窗口快速切换器（Rust + Tauri 2 / WebView2，Windows-only）。�
 
 1. **先读后写**：理解意图再改；有多种理解时列出，不擅自选；不确定先问。
 2. **简洁优先、精准修改**：只动必须改的，不顺手重构/格式化相邻代码；注意到无关死代码先提出不擅自删。
-3. **改完自动验证**：`cd src-tauri && cargo test`（单测：配置校验/序列化、状态机筛选排序、版本资源）通过 → `cargo build` → 启动 `./target/debug/winhop.exe`（debug 不弹 UAC）→ 查 `winhop.log` 启动正常 → 交给用户实测。**不主动杀用户在跑的实例**（release 提权需提权 taskkill，见 build.md）。CI（`.github/workflows/ci.yml`）在 PR/主分支跑 `cargo test` + 前端 `node --check`，推 `v*` tag 自动打包发布。
+3. **改完自动验证**：`cd src-tauri && cargo test`（22 项：配置校验/序列化、状态机筛选排序/程序列表、代号冲突、热键 vk、枚举冒烟、版本资源）+ 前端 `node --test`（`src/util.js` 纯函数）与 `node --check` 通过 → `cargo build` → 启动 `./target/debug/winhop.exe`（debug 不弹 UAC）→ 查 `winhop.log` 启动正常 → 交给用户实测。**不主动杀用户在跑的实例**（release 提权需提权 taskkill，见 build.md）。CI（`.github/workflows/ci.yml`）在 PR/主分支跑 `cargo test` + 前端 `node --test`/`node --check`，推 `v*` tag 自动打包发布。
 4. **用户说「提交」** = `git commit` + `git push -u origin main`；没说不推。
 5. **书面内容主要用中文**；代码、命令、技术术语、API 名保持原文不汉化。
 6. **文档与代码始终一致**：改动行为/架构/配置/命令/流程时，同一提交内同步更新受影响文档（主要是 `docs/design.md`，以及 build/debug/release/TODO/glossary 和 README）。文档描述以当前代码为准；发现文档与实现不符时先对齐再继续，不允许文档滞后。

@@ -24,13 +24,17 @@ npm run tauri dev
 ## 单测
 
 ```bash
-cd src-tauri
-cargo test --release
+# Rust：配置校验/序列化、状态机匹配筛选/分页/程序列表、程序编辑代号冲突、热键 vk 映射、枚举冒烟、版本资源
+cd src-tauri && cargo test
+
+# 前端：纯函数（src/util.js 的 escapeHtml / prettyHotkey）单测 + 全量 JS 语法检查
+node --test            # 或 npm test（package.json）
+node --check src/main.js && node --check src/i18n.js
 ```
 
-现有回归测试（`src-tauri/src/windows.rs`）：
-- `full_name_not_truncated`：版本资源名称不截断（Chrome → "Google Chrome"）
-- `system_exe_not_generic_name`：系统二进制不返回通用串
+- Rust 现有 22 项（`config.rs` / `lib.rs` / `windows.rs`，`cargo test` 全绿）。
+- 前端纯函数集中放 `src/util.js`（不依赖 DOM/Tauri，可被 `node --test` 直接测）；新增纯逻辑一律抽到这里并加 `*.test.js`，CI 会自动跑。
+- Win32 交互层（真实激活/热键/DWM/钩子/IME）依赖交互桌面，CI 无可靠用户会话，不纳入自动化，走下面的手动验证清单。
 
 ## 手动验证清单（每次改动后）
 

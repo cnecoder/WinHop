@@ -27,7 +27,8 @@
 
 - [x] **开机自启**：设置页勾选 + `autostart` 配置项，落地注册表 `HKCU\...\Run` 的 `WinHop` 值；保存先写注册表（失败整体不保存），启动时以配置为准幂等对齐（v0.3.x）
 - [x] **自动化单元测试**：配置校验/原子保存/序列化（config.rs）、状态机匹配筛选/分页/程序列表排序与名称回退（lib.rs）、程序编辑代号校验与冲突检测（`validate_program_key`/`apply_program_edit`）、热键 vk 映射、`enum_windows` 冒烟不 panic、版本资源（windows.rs），`cargo test` 共 22 项（v0.3.x）
-- [x] **CI**：GitHub Actions（`.github/workflows/ci.yml`）——PR/主分支跑 `cargo test` + 前端 `node --check`；推 `v*` tag 自动构建 NSIS/MSI 并建 Release 上传（流程见 [release.md](release.md)）
+- [x] **前端纯函数单测**：`src/util.js`（escapeHtml/prettyHotkey 等不依赖 DOM 的逻辑）用 `node --test` 覆盖，新增纯逻辑抽到此文件并加 `*.test.js`
+- [x] **CI**：GitHub Actions（`.github/workflows/ci.yml`）——PR/主分支跑 `cargo test` + 前端 `node --test`/`node --check`；推 `v*` tag 自动构建 NSIS/MSI 并幂等发布 Release（流程见 [release.md](release.md)）
 
 - [x] **日志轮转**：`winhop.log` 超 1MB 轮转 `winhop.log.1`（v0.3.0）
 - [x] **实时缩略图**：窗口层改用 DWM 缩略图实时合成，被遮挡/最小化也清晰、随窗口内容实时更新（替代 PrintWindow/WGC 静态截图，v0.3.0）
