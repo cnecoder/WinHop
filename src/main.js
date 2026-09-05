@@ -52,6 +52,7 @@ function readSettingsForm() {
   const wdm = document.querySelector('input[name="win-digit-mode"]:checked');
   return {
     hotkey: formHotkey,
+    autostart: document.getElementById("autostart-check").checked,
     window_order: order ? order.value : "zorder",
     multi_letter: (mode ? mode.value : "single") === "multi",
     theme: theme ? theme.value : "black-green",
@@ -69,6 +70,7 @@ function settingsDirty() {
   const savedBlocked = [...(settingsLoaded.blocked || [])].sort().join(",");
   return (
     cur.hotkey !== settingsLoaded.hotkey ||
+    cur.autostart !== settingsLoaded.autostart ||
     cur.window_order !== settingsLoaded.window_order ||
     cur.multi_letter !== settingsLoaded.multi_letter ||
     cur.theme !== settingsLoaded.theme ||
@@ -93,6 +95,7 @@ async function openSettings() {
   const info = await invoke("get_settings");
   settingsLoaded = {
     hotkey: info.hotkey || "ctrl+space",
+    autostart: !!info.autostart,
     window_order: info.window_order,
     multi_letter: info.multi_letter,
     theme: info.theme,
@@ -101,6 +104,7 @@ async function openSettings() {
     lang: info.lang_cfg || "system",
     blocked: (info.blocked || []).map((b) => b.process).sort(),
   };
+  document.getElementById("autostart-check").checked = !!info.autostart;
   document.querySelectorAll('input[name="order"]').forEach((r) => {
     r.checked = r.value === info.window_order;
   });
@@ -430,6 +434,10 @@ document
   .forEach((el) => {
     el.addEventListener("change", updateSettingsState);
   });
+
+document
+  .getElementById("autostart-check")
+  .addEventListener("change", updateSettingsState);
 
 document.getElementById("settings-save").addEventListener("click", () => {
   saveSettingsAndClose();

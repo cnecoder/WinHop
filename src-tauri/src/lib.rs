@@ -1001,6 +1001,7 @@ const CURRENT_CHANGELOG: ChangelogEntry = ChangelogEntry {
 struct SettingsInfo {
     version: String,
     hotkey: String,
+    autostart: bool,
     window_order: String,
     multi_letter: bool,
     theme: String,
@@ -1054,6 +1055,7 @@ fn get_settings(app: AppHandle) -> SettingsInfo {
     SettingsInfo {
         version: APP_VERSION.into(),
         hotkey: cfg.hotkey.clone(),
+        autostart: cfg.autostart,
         window_order: cfg.window_order.clone(),
         multi_letter: cfg.multi_letter,
         theme: cfg.theme.clone(),
@@ -1095,6 +1097,8 @@ struct SettingsInput {
     /// 新全局热键（global-shortcut 串）；设置页打开期间热键已 suspend
     #[serde(default)]
     hotkey: String,
+    #[serde(default)]
+    autostart: bool,
     window_order: String,
     multi_letter: bool,
     theme: String,
@@ -1153,10 +1157,19 @@ fn save_settings(app: AppHandle, input: SettingsInput) -> Result<(), String> {
         // 未改热键：恢复注册旧键（suspend 期间被注销）
         let _ = app.global_shortcut().register(old);
     }
+    // 开机自启：先落地注册表（HKCU\...\Run），失败则整体不保存（与热键注册同一模式）
+    let old_autostart = inner.cfg.lock().unwrap().autostart;
+    if input.autostart != old_autostart {
+        if let Err(e) = windows::set_autostart(input.autostart) {
+            eprintln!("[winhop] 自启注册表写入失败: {}", e);
+            return Err(format!("设置开机自启失败: {}", e));
+        }
+    }
     let save_res = {
         let mut cfg = inner.cfg.lock().unwrap();
         cfg.window_order = input.window_order.clone();
         cfg.multi_letter = input.multi_letter;
+        cfg.autostart = input.autostart;
         cfg.theme = input.theme.clone();
         cfg.win_digit_mode = input.win_digit_mode.clone();
         cfg.lang = lang;
@@ -1488,6 +1501,10 @@ pub fn run() {
     if !windows::acquire_single_instance() {
         eprintln!("[winhop] 已有实例在运行，退出");
         return;
+    }
+    // 开机自启：以配置为准对齐 HKCU\...\Run（幂等；外部删过值/升级场景下自愈）
+    if let Err(e) = windows::set_autostart(cfg.autostart) {
+        eprintln!("[winhop] 对齐自启注册表失败: {}", e);
     }
     // 配置热键无效时回退默认，不让 app 崩溃
     let shortcut = Shortcut::from_str(&cfg.hotkey).unwrap_or_else(|e| {

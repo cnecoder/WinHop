@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use windows_sys::Win32::Foundation::{
     CloseHandle, BOOL, GENERIC_WRITE, HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM, LRESULT, POINT,
-    RECT, WPARAM, ERROR_ALREADY_EXISTS, GetLastError,
+    RECT, WPARAM, ERROR_ALREADY_EXISTS, ERROR_FILE_NOT_FOUND, GetLastError,
 };
 use windows_sys::Win32::Graphics::Dwm::{
     DwmRegisterThumbnail, DwmUnregisterThumbnail, DwmUpdateThumbnailProperties,
@@ -18,6 +18,10 @@ use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, SetFilePointer, FILE_END, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_ALWAYS,
 };
 use windows_sys::Win32::System::Console::{SetStdHandle, STD_ERROR_HANDLE};
+use windows_sys::Win32::System::Registry::{
+    RegCloseKey, RegCreateKeyExW, RegDeleteValueW, RegSetValueExW, HKEY, HKEY_CURRENT_USER,
+    KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_SZ,
+};
 use windows_sys::Win32::System::Threading::{
     CreateMutexW, GetCurrentProcess, GetCurrentProcessId, GetCurrentThreadId, OpenProcess,
     OpenProcessToken, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -865,6 +869,54 @@ pub fn relaunch_elevated() {
         if h as isize <= 32 {
             eprintln!("[winhop] 提权重启失败 {:?}", h);
         }
+    }
+}
+
+// 开机自启：HKCU\Software\Microsoft\Windows\CurrentVersion\Run 下写 WinHop 值（REG_SZ）。
+// HKCU 无需提权；enable=false 删除该值（不存在返回 ERROR_FILE_NOT_FOUND=2 视为成功）。
+// 命令行为加引号的 exe 路径，防路径含空格（Program Files）时资源管理器解析错误。
+const AUTOSTART_RUN_KEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+const AUTOSTART_VALUE: &str = "WinHop";
+
+pub fn set_autostart(enable: bool) -> Result<(), String> {
+    unsafe {
+        let mut hkey: HKEY = std::mem::zeroed();
+        let subkey = to_wide(AUTOSTART_RUN_KEY);
+        let status = RegCreateKeyExW(
+            HKEY_CURRENT_USER,
+            subkey.as_ptr(),
+            0,
+            std::ptr::null_mut(),
+            REG_OPTION_NON_VOLATILE,
+            KEY_SET_VALUE,
+            std::ptr::null(),
+            &mut hkey,
+            std::ptr::null_mut(),
+        );
+        if status != 0 {
+            return Err(format!("打开 Run 注册表项失败 code={}", status));
+        }
+        let name = to_wide(AUTOSTART_VALUE);
+        let result = if enable {
+            let exe = std::env::current_exe().map_err(|e| format!("获取 exe 路径失败: {}", e))?;
+            let cmd = format!("\"{}\"", exe.display());
+            let data = to_wide(&cmd);
+            RegSetValueExW(
+                hkey,
+                name.as_ptr(),
+                0,
+                REG_SZ,
+                data.as_ptr() as *const u8,
+                (data.len() * std::mem::size_of::<u16>()) as u32,
+            )
+        } else {
+            RegDeleteValueW(hkey, name.as_ptr())
+        };
+        RegCloseKey(hkey);
+        if result != 0 && !( !enable && result == ERROR_FILE_NOT_FOUND ) {
+            return Err(format!("写入自启注册表失败 code={}", result));
+        }
+        Ok(())
     }
 }
 

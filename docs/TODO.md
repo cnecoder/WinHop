@@ -2,7 +2,6 @@
 
 ## 功能缺口（已确认需求但未实现，Windows-only 后均为可用专属能力）
 
-- [ ] **开机自启**（高优先级）：`autostart` 配置项，写入注册表 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`（原设计项）
 - [ ] **UIAccess 免 UAC**（高优先级）：代码签名 + 可信位置部署后可免提权弹窗（需签名证书）
 - [ ] **虚拟桌面支持**（低优先级，用户场景少用）：目标窗口在另一任务视图桌面时无法激活——`IVirtualDesktopManager` COM API（先做识别+标记，再考虑自动切桌面）
 - [ ] **`winhop capture` 辅助命令**：CLI 打印当前激活窗口的进程名/标题，方便手写配置（原设计项，现已被「✎ 统一编辑入配置」部分替代，纯手写场景仍有用）
@@ -27,6 +26,7 @@
 
 ## 已完成（历史记录）
 
+- [x] **开机自启**：设置页勾选 + `autostart` 配置项，落地注册表 `HKCU\...\Run` 的 `WinHop` 值；保存先写注册表（失败整体不保存），启动时以配置为准幂等对齐（v0.3.x）
 - [x] **自动化单元测试**：配置校验/原子保存/序列化（config.rs）、状态机匹配筛选/分页（lib.rs）、版本资源（windows.rs），`cargo test` 共 14 项（v0.3.x）
 - [x] **CI**：GitHub Actions（`.github/workflows/ci.yml`）——PR/主分支跑 `cargo test` + 前端 `node --check`；推 `v*` tag 自动构建 NSIS/MSI 并建 Release 上传（流程见 [release.md](release.md)）
 

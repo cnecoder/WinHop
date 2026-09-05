@@ -719,11 +719,28 @@ body {
   cursor: pointer;
 }
 
-.setting-row input[type="radio"],
-.setting-row input[type="checkbox"] {
+.setting-row input[type="radio"] {
   accent-color: var(--accent);
   width: 16px;
   height: 16px;
+}
+
+/* 复选框圆形实心点：与原生 radio 外观一致（未选=浅白点，选中=accent 点） */
+.setting-row input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  border: none;
+  border-radius: 50%;
+  background: var(--fg);
+  cursor: pointer;
+  flex: none;
+}
+
+.setting-row input[type="checkbox"]:checked {
+  background: var(--accent);
 }
 
 .primary-btn {

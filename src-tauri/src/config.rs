@@ -5,6 +5,9 @@ pub struct Config {
     pub hotkey: String,
     #[serde(default = "default_true")]
     pub elevate: bool,
+    /// 开机自启：写注册表 HKCU\...\Run（由 windows::set_autostart 落地，非仅配置项）
+    #[serde(default)]
+    pub autostart: bool,
     #[serde(default = "default_window_order")]
     pub window_order: String,
     #[serde(default)]
@@ -252,6 +255,7 @@ pub fn load() -> (Config, std::path::PathBuf) {
     let default = Config {
         hotkey: "ctrl+space".into(),
         elevate: true,
+        autostart: false,
         window_order: "zorder".into(),
         multi_letter: false,
         theme: default_theme(),
@@ -389,6 +393,7 @@ mod tests {
         Config {
             hotkey: "ctrl+space".into(),
             elevate: true,
+            autostart: false,
             window_order: "zorder".into(),
             multi_letter: false,
             theme: "black-green".into(),

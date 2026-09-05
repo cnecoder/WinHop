@@ -112,6 +112,7 @@ MRU 在经 WinHop 切换、呼出时记录前台、以及看门狗线程检测�
 {
   "hotkey": "ctrl+space",
   "elevate": true,
+  "autostart": false,
   "window_order": "zorder",
   "multi_letter": false,
   "theme": "black-green",
@@ -129,6 +130,7 @@ MRU 在经 WinHop 切换、呼出时记录前台、以及看门狗线程检测�
 |---|---|
 | `hotkey` | 全局热键（`修饰键+按键`），默认 `ctrl+space`。注册失败不退出（日志 + 托盘兜底）；配置值无效回退默认 |
 | `elevate` | release 是否提权运行（切管理员程序必需）；debug 构建忽略，不弹 UAC |
+| `autostart` | 开机自启。落地于注册表 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 的 `WinHop` 值（REG_SZ，加引号的 exe 路径），非仅配置项；保存设置时先写注册表（失败整体不保存），启动时以配置为准幂等对齐 |
 | `window_order` | 窗口层排序：`zorder` / `mru` |
 | `multi_letter` | 多字母模式开关 |
 | `theme` | 主题 id：`black-green`（默认）/ `black-yellow`；配色全走 CSS 变量，`<html data-theme>` 切换 |
