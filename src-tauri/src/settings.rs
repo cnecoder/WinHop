@@ -25,17 +25,17 @@ struct ChangelogEntry {
 
 // 当前版本的更新记录（设置页只显示当前版本，按界面语言取中/英文）
 const CURRENT_CHANGELOG: ChangelogEntry = ChangelogEntry {
-    version: "0.3.2",
+    version: "0.3.3",
     date: "2026-09",
     notes_zh: &[
-        "修复「幽灵窗口」：单窗口程序（cc-switch、MobaXterm 等）不再多出打不开的窗口，窗口列表与 Alt+Tab 一致（跳过 DWM 隐藏的后台/挂起窗口与工具窗口）",
-        "保存设置更可靠：保存失败（如开机自启被系统拒绝）时，已注册的新热键会一并还原，不会出现「设置页还开着、新热键已生效」的错乱",
-        "回归防线：键位交互（数字跳转/组合编号/筛选/翻页/空格互切）抽成纯函数并纳入自动化单元测试（Rust 34 项 + 前端 10 项），每次推送 CI 自动运行",
+        "全新安装不再为常用软件内置固定字母代号：Edge、VS Code 等不再自带 ed、vs 等快捷键，所有代号都由你用 ✎ 编辑面板按需配置，键位完全自己掌控",
+        "多字母模式下不配代号也能用：直接敲程序名（如 ed、vs、chrome）即可筛选并切换，代号只是给常用程序一个更短的固定快捷键",
+        "修复开发版调试时可能把开机自启指向调试程序、导致开机弹出黑色控制台窗口的问题（正式版不受影响）",
     ],
     notes_en: &[
-        "Fixed \"ghost windows\": single-window apps (cc-switch, MobaXterm, etc.) no longer show extra unopenable windows — the window list now matches Alt+Tab (DWM-cloaked background/suspended windows and tool windows are skipped)",
-        "More reliable settings save: on failure (e.g. autostart rejected by the system) the newly registered hotkey is rolled back too — no more \"settings page open but the new hotkey already active\"",
-        "Regression guard: key interactions (digit jump / combo index / filter / paging / Space toggle) are now pure functions covered by automated unit tests (34 Rust + 10 frontend), run by CI on every push",
+        "Fresh installs no longer ship with built-in letter codes for common apps: Edge, VS Code, etc. no longer come with hardcoded shortcuts like ed/vs — assign every code yourself via the ✎ edit panel, so your keybindings are fully yours",
+        "Multi-letter mode works without any codes: just type the app name (e.g. ed, vs, chrome) to filter and switch; codes are only a shorter fixed shortcut for your favorites",
+        "Fixed a dev-build issue where debugging could point the autostart entry at the debug executable and pop up a black console window at boot (release builds were unaffected)",
     ],
 };
 
