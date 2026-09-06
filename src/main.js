@@ -533,6 +533,25 @@ function startEditProgram(btn) {
       });
   });
 
+  // 删除按钮：仅已配置程序显示。移除已存名称/代号（不加黑名单）——未运行即从列表消失，
+  // 运行中仍作为未配置项（·）出现可重新配；与「屏蔽」（彻底隐藏）区分
+  let delBtn = null;
+  if (prog.configured) {
+    delBtn = document.createElement("button");
+    delBtn.className = "block-btn";
+    delBtn.textContent = isEn() ? "Delete" : "删除";
+    delBtn.title = isEn()
+      ? "Remove its saved name/code: hidden when not running, still shows (unconfigured) while running. Use Block to hide it entirely."
+      : "移除已存名称/代号：未运行时从列表消失，运行中仍以未配置（·）显示可重配；想彻底隐藏用「屏蔽」";
+    delBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      invoke("delete_program", { process: prog.process }).then(() => {
+        panel.remove();
+        btn.style.display = "";
+      });
+    });
+  }
+
   // 单字母模式显示可用字母提示；多字母模式提示代号规则
   let hint;
   if (!multi) {
@@ -615,6 +634,7 @@ function startEditProgram(btn) {
   fields.appendChild(nameInput);
   fields.appendChild(confirmBtn);
   fields.appendChild(blockBtn);
+  if (delBtn) fields.appendChild(delBtn);
   panel.appendChild(fields);
   panel.appendChild(hint);
   btn.style.display = "none";

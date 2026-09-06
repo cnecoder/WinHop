@@ -25,17 +25,15 @@ struct ChangelogEntry {
 
 // 当前版本的更新记录（设置页只显示当前版本，按界面语言取中/英文）
 const CURRENT_CHANGELOG: ChangelogEntry = ChangelogEntry {
-    version: "0.3.3",
+    version: "0.3.4",
     date: "2026-09",
     notes_zh: &[
-        "全新安装不再为常用软件内置固定字母代号：Edge、VS Code 等不再自带 ed、vs 等快捷键，所有代号都由你用 ✎ 编辑面板按需配置，键位完全自己掌控",
-        "多字母模式下不配代号也能用：直接敲程序名（如 ed、vs、chrome）即可筛选并切换，代号只是给常用程序一个更短的固定快捷键",
-        "修复开发版调试时可能把开机自启指向调试程序、导致开机弹出黑色控制台窗口的问题（正式版不受影响）",
+        "新增删除程序配置：✎ 编辑面板里点「删除」即可移除不再需要的软件名称和代号——未运行的程序不再灰色占位，列表更干净；运行中的程序仍会以未配置（·）出现，随时可重新配",
+        "「删除」与「屏蔽」区分清楚：删除只是清掉你保存的名称/代号（程序运行时仍列出）；屏蔽则把程序加入黑名单、运行时也彻底隐藏（设置页可解除）",
     ],
     notes_en: &[
-        "Fresh installs no longer ship with built-in letter codes for common apps: Edge, VS Code, etc. no longer come with hardcoded shortcuts like ed/vs — assign every code yourself via the ✎ edit panel, so your keybindings are fully yours",
-        "Multi-letter mode works without any codes: just type the app name (e.g. ed, vs, chrome) to filter and switch; codes are only a shorter fixed shortcut for your favorites",
-        "Fixed a dev-build issue where debugging could point the autostart entry at the debug executable and pop up a black console window at boot (release builds were unaffected)",
+        "New: delete a program's config — in the ✎ edit panel, click \"Delete\" to remove a saved name/code you no longer need. Programs that aren't running no longer clutter the list in grey; ones that are running still show up unconfigured (·) and can be re-configured anytime",
+        "\"Delete\" vs \"Block\" made clear: Delete only clears the saved name/code (the app still appears while running); Block adds it to a blacklist and hides it entirely, even while running (unblock in settings)",
     ],
 };
 

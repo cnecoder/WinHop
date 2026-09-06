@@ -1,6 +1,6 @@
 [package]
 name = "winhop"
-version = "0.3.3"
+version = "0.3.4"
 description = "程序快速切换器"
 authors = ["luo"]
 edition = "2021"

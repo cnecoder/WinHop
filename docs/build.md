@@ -33,7 +33,7 @@ node --test            # 或 npm test（package.json）
 node --check src/main.js && node --check src/i18n.js
 ```
 
-- Rust 现有 34 项（`config.rs` / `lib.rs` / `windows.rs`，`cargo test` 全绿）。核心交互逻辑是纯函数 `OverlayState::transition(...) -> Effect`（不碰 Tauri/锁），数字累积、组合编号、preview、Esc 两级、字母筛选、翻页、空格 MRU 等键位模型均有单测覆盖。
+- Rust 现有 35 项（`config.rs` / `lib.rs` / `windows.rs`，`cargo test` 全绿）。核心交互逻辑是纯函数 `OverlayState::transition(...) -> Effect`（不碰 Tauri/锁），数字累积、组合编号、preview、Esc 两级、字母筛选、翻页、空格 MRU 等键位模型，以及程序编辑/删除（`apply_program_edit`/`apply_program_delete`）均有单测覆盖。
 - 前端纯函数集中放 `src/util.js`（不依赖 DOM/Tauri，可被 `node --test` 直接测）；新增纯逻辑一律抽到这里并加 `*.test.js`，CI 会自动跑。
 - Win32 交互层（真实激活/热键/DWM/钩子/IME）依赖交互桌面，CI 无可靠用户会话，不纳入自动化，走下面的手动验证清单。
 

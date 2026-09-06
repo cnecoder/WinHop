@@ -1038,6 +1038,14 @@ fn apply_program_edit(
     Ok(())
 }
 
+// 纯逻辑：从配置中删除程序条目（移除已存名称/代号）。返回是否删除了条目。
+// 与屏蔽不同：不加黑名单——程序未运行时不再灰色显示；运行中仍作为未配置项（·）出现、可重新配置。
+fn apply_program_delete(cfg: &mut Config, process: &str) -> bool {
+    let before = cfg.programs.len();
+    cfg.programs.retain(|p| p.process != process);
+    cfg.programs.len() != before
+}
+
 #[tauri::command]
 fn edit_program(
     app: AppHandle,
@@ -1071,7 +1079,25 @@ fn edit_program(
     Ok(())
 }
 
-// 从当前可见窗口重建程序列表并 emit（编辑/屏蔽后刷新覆盖层）
+// 删除程序配置：移除已存名称/代号（不加黑名单）。未运行即不再灰色显示；
+// 运行中仍作为未配置项（·）出现、可重新 ✎ 配置。想彻底隐藏（运行时也不显示）用「屏蔽」。
+#[tauri::command]
+fn delete_program(app: AppHandle, process: String) -> Result<(), String> {
+    let process = process.to_lowercase();
+    let inner = app.state::<Inner>();
+    {
+        let mut cfg = inner.cfg.lock().unwrap();
+        apply_program_delete(&mut cfg, &process);
+        config::save(&cfg, &inner.cfg_path).map_err(|e| format!("保存配置失败: {}", e))?;
+    }
+    eprintln!("[t={}] 删除程序配置 {}", windows::now_ms(), process);
+    if inner.visible.load(Ordering::Relaxed) {
+        rebuild_and_emit(&app, &inner);
+    }
+    Ok(())
+}
+
+// 从当前可见窗口重建程序列表并 emit（编辑/屏蔽/删除后刷新覆盖层）
 fn rebuild_and_emit(app: &AppHandle, inner: &Inner) {
     let mut ov = inner.overlay.lock().unwrap();
     let cfg = inner.cfg.lock().unwrap().clone();
@@ -1275,6 +1301,7 @@ pub fn run() {
             thumb_clear,
             toggle_fullscreen,
             edit_program,
+            delete_program,
             block_program,
             unblock_program,
             refresh_overlay,
@@ -1571,6 +1598,21 @@ mod state_machine_tests {
         assert_eq!(cfg.programs[2].process, "firefox.exe");
         assert_eq!(cfg.programs[2].key, "f");
         assert_eq!(cfg.programs[2].multi_key, ""); // 单字母新增，多字母留空
+    }
+
+    #[test]
+    fn apply_program_delete_removes_entry_only() {
+        let mut cfg = cfg_with(vec![
+            prog("c", "ch", "Chrome", "chrome.exe"),
+            prog("v", "vs", "Code", "code.exe"),
+        ]);
+        // 删除存在的条目：返回 true、条目移除，其余不受影响
+        assert!(apply_program_delete(&mut cfg, "chrome.exe"));
+        assert_eq!(cfg.programs.len(), 1);
+        assert_eq!(cfg.programs[0].process, "code.exe");
+        // 删除不存在的：返回 false、无变化
+        assert!(!apply_program_delete(&mut cfg, "chrome.exe"));
+        assert_eq!(cfg.programs.len(), 1);
     }
 
     #[test]
