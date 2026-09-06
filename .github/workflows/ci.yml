@@ -55,5 +55,6 @@ jobs:
           if (gh release view $ver 2>$null) {
             gh release upload $ver $nsis $msi --clobber
           } else {
-            gh release create $ver $nsis $msi --title "WinHop $ver" --generate-notes
+            # title 用纯版本号（$ver，如 v0.3.3），与历史 Release 列表风格一致，不加 WinHop 前缀
+            gh release create $ver $nsis $msi --title $ver --generate-notes
           }

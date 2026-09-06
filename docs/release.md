@@ -127,14 +127,14 @@ git push origin vX.Y.Z
 gh release create vX.Y.Z \
   "src-tauri/target/release/bundle/nsis/WinHop_X.Y.Z_x64-setup.exe" \
   "src-tauri/target/release/bundle/msi/WinHop_X.Y.Z_x64_en-US.msi" \
-  --title "WinHop vX.Y.Z" \
+  --title "vX.Y.Z" \
   --notes-file /tmp/notes.md
 ```
 
 **gh 认证不可用时（网络受限，如本机仅 SSH 能通）走网页**：
 
 1. 打开 `https://github.com/<owner>/<repo>/releases/new?tag=vX.Y.Z`（tag 已推，自动选中）
-2. Title 填 `WinHop vX.Y.Z`
+2. Title 填 `vX.Y.Z`（纯版本号，与历史 Release 列表一致，不加 WinHop 前缀）
 3. 正文粘贴双语 release note（按上面模板写）
 4. Attach binaries 拖入上面两个安装包
 5. 勾 "Set as the latest release" → Publish
