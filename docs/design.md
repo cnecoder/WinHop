@@ -105,7 +105,7 @@ MRU 在经 WinHop 切换、呼出时记录前台、以及看门狗线程检测�
 ### 位置与迁移
 
 `%APPDATA%\WinHop\config.json`（用户目录，安装器不触碰，升级/重装不丢）。日志同目录 `winhop.log`（超 1MB 轮转为 `winhop.log.1`）。
-首次运行自动迁移旧位置：`%APPDATA%\WinTab`（改名前整目录迁移）、exe 目录/项目根目录的 `config.json`（复制到 APPDATA，旧文件保留）。APPDATA 不可用时退回 exe 目录。缺失则生成默认配置（常用软件预置代号）。
+首次运行自动迁移旧位置：`%APPDATA%\WinTab`（改名前整目录迁移）、exe 目录/项目根目录的 `config.json`（复制到 APPDATA，旧文件保留）。APPDATA 不可用时退回 exe 目录。缺失则生成默认配置（预置常用软件条目：仅名称/进程用于识别与友好命名，代号留空，字母一律由用户显式配置）。
 
 ### 字段
 
@@ -131,7 +131,7 @@ MRU 在经 WinHop 切换、呼出时记录前台、以及看门狗线程检测�
 |---|---|
 | `hotkey` | 全局热键（`修饰键+按键`），默认 `ctrl+space`。注册失败不退出（日志 + 托盘兜底）；配置值无效回退默认 |
 | `elevate` | release 是否提权运行（切管理员程序必需）；debug 构建忽略，不弹 UAC |
-| `autostart` | 开机自启。落地于注册表 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 的 `WinHop` 值（REG_SZ，加引号的 exe 路径），非仅配置项；保存设置时先写注册表（失败整体不保存），启动时以配置为准幂等对齐 |
+| `autostart` | 开机自启。落地于注册表 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 的 `WinHop` 值（REG_SZ，加引号的 exe 路径），非仅配置项；保存设置时先写注册表（失败整体不保存），启动时以配置为准幂等对齐。**debug 构建（console 子系统）跳过注册表写入**，避免 dev 验证污染自启路径（见 debug.md） |
 | `window_order` | 窗口层排序：`zorder` / `mru` |
 | `multi_letter` | 多字母模式开关 |
 | `theme` | 主题 id：`black-green`（默认）/ `black-yellow`；配色全走 CSS 变量，`<html data-theme>` 切换 |

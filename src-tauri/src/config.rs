@@ -377,32 +377,33 @@ pub fn save(cfg: &Config, path: &std::path::Path) -> std::io::Result<()> {
     std::fs::rename(&tmp, path)
 }
 
-// 预置常用软件别名：key 为单字母模式代号，multi_key 为多字母模式代号，process 为小写 exe 名。
-// 用户首次启动即生成；未运行的条目灰色排在末尾，不做启动器。
+// 预置常用软件条目：仅 name/process（用于识别与友好命名），代号（key/multi_key）一律留空——
+// 字母只能由用户显式配置（✎ 编辑面板或设置页），出厂不代分配。首次启动生成；
+// 未运行的条目灰色排在末尾，不做启动器；运行时未预置的程序同样追加、代号留空显示「·」。
 fn default_programs() -> Vec<Program> {
-    let p = |key: &str, mk: &str, name: &str, proc: &str| Program {
-        key: key.into(),
-        multi_key: mk.into(),
+    let p = |name: &str, proc: &str| Program {
+        key: String::new(),
+        multi_key: String::new(),
         name: name.into(),
         process: proc.into(),
     };
     vec![
-        p("c", "ch", "Chrome", "chrome.exe"),
-        p("e", "ed", "Edge", "msedge.exe"),
-        p("f", "ff", "Firefox", "firefox.exe"),
-        p("v", "vs", "VS Code", "code.exe"),
-        p("t", "te", "终端", "windowsterminal.exe"),
-        p("p", "ps", "PowerShell", "powershell.exe"),
-        p("n", "no", "记事本", "notepad.exe"),
-        p("r", "ex", "资源管理器", "explorer.exe"),
-        p("s", "sl", "Slack", "slack.exe"),
-        p("d", "di", "Discord", "discord.exe"),
-        p("o", "ou", "Outlook", "outlook.exe"),
-        p("w", "wo", "Word", "winword.exe"),
-        p("x", "xl", "Excel", "excel.exe"),
-        p("y", "wx", "微信", "wechat.exe"),
-        p("q", "qq", "QQ", "qq.exe"),
-        p("z", "dd", "钉钉", "dingtalk.exe"),
+        p("Chrome", "chrome.exe"),
+        p("Edge", "msedge.exe"),
+        p("Firefox", "firefox.exe"),
+        p("VS Code", "code.exe"),
+        p("终端", "windowsterminal.exe"),
+        p("PowerShell", "powershell.exe"),
+        p("记事本", "notepad.exe"),
+        p("资源管理器", "explorer.exe"),
+        p("Slack", "slack.exe"),
+        p("Discord", "discord.exe"),
+        p("Outlook", "outlook.exe"),
+        p("Word", "winword.exe"),
+        p("Excel", "excel.exe"),
+        p("微信", "wechat.exe"),
+        p("QQ", "qq.exe"),
+        p("钉钉", "dingtalk.exe"),
     ]
 }
 
@@ -543,11 +544,18 @@ mod tests {
 
     #[test]
     fn default_programs_present() {
-        assert!(!default_programs().is_empty());
-        // 默认代号单字母唯一
+        let progs = default_programs();
+        assert!(!progs.is_empty());
+        // 出厂不代分配代号：单字母/多字母代号一律留空，字母只能由用户显式配置
+        for p in &progs {
+            assert!(p.key.is_empty(), "默认不应预置单字母代号: {}", p.name);
+            assert!(p.multi_key.is_empty(), "默认不应预置多字母代号: {}", p.name);
+            assert!(!p.process.is_empty() && !p.name.is_empty());
+        }
+        // 预置进程名唯一
         let mut seen = std::collections::HashSet::new();
-        for p in default_programs() {
-            assert!(seen.insert(p.key.clone()), "默认单字母代号重复 {}", p.key);
+        for p in &progs {
+            assert!(seen.insert(p.process.clone()), "默认进程名重复 {}", p.process);
         }
     }
 

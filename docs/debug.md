@@ -60,6 +60,7 @@ dev 版不主动杀，交给用户实测。手动验证清单见 [build.md](buil
 | 鼠标卡顿/热键派发挂 | 主线程被阻塞（曾因 WebView2 hide+IPC 期间外部抢焦点）。`close()` 内激活必须 `spawn` 独立线程且在 emit 之后，详见 lib.rs `close_impl` 注释 |
 | 切到别的虚拟桌面的窗口无效 | 已知限制（`activate_with_retry` 日志 `可能在另一个虚拟桌面`），见 TODO |
 | 配置改坏启动崩 | `read_cfg` 解析失败会 panic；日志看 `解析/读取 config.json 失败`。配置写入是原子的（tmp+rename） |
+| **开机自启弹出黑终端/控制台** | **dev 机器特有坑**：debug exe（`target\debug\winhop.exe`）是 console 子系统，而正式 release 是 `windows_subsystem="windows"`（无控制台）。两者共享 `%APPDATA%\WinHop\config.json`，若 debug 运行时勾选过自启，启动对齐会把 `HKCU\...\Run` 的 `WinHop` 值重写成 debug 路径 → 开机弹黑终端、关 X 即杀进程。已加防护：`windows::set_autostart` 在 `cfg!(debug_assertions)` 下直接跳过注册表写入（启动对齐/设置保存两处收口）。若 Run 值已被污染：改回正式安装路径或卸载重装；手动查 `(Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name WinHop).WinHop` |
 
 ## 排障记录归档
 

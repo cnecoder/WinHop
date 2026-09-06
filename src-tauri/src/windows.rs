@@ -904,6 +904,14 @@ const AUTOSTART_RUN_KEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\R
 const AUTOSTART_VALUE: &str = "WinHop";
 
 pub fn set_autostart(enable: bool) -> Result<(), String> {
+    // debug 构建（target\debug\winhop.exe）是 console 子系统，开机自启会弹黑终端；
+    // 且 dev 验证与正式版共享 %APPDATA%\WinHop\config.json，若写 Run 键会把自启指向
+    // debug 路径，污染正式用户环境（启动对齐/设置保存两处都走这里）。debug 一律跳过，
+    // 正式 release（windows_subsystem="windows"）才真正读写注册表。
+    if cfg!(debug_assertions) {
+        eprintln!("[winhop] debug 构建跳过自启注册表写入（enable={}）", enable);
+        return Ok(());
+    }
     unsafe {
         let mut hkey: HKEY = std::mem::zeroed();
         let subkey = to_wide(AUTOSTART_RUN_KEY);
