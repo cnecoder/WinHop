@@ -135,7 +135,8 @@ body {
   color: var(--dim);
 }
 
-#settings-btn {
+#settings-btn,
+#help-btn {
   background: var(--accent);
   border: none;
   color: var(--on-accent);
@@ -147,7 +148,13 @@ body {
   transition: background var(--dur) var(--ease);
 }
 
-#settings-btn:hover {
+#help-btn {
+  padding: 3px 10px;
+  font-weight: 700;
+}
+
+#settings-btn:hover,
+#help-btn:hover {
   background: var(--accent-strong);
 }
 
@@ -844,6 +851,80 @@ body {
   color: var(--dim);
   font-size: 14px;
   line-height: 1.7;
+}
+
+/* ===== 帮助页（纯前端视图，不经过 Rust 状态机） ===== */
+#help-view {
+  max-width: 720px;
+  margin: 0 auto;
+  animation: overlay-in var(--dur) var(--ease);
+}
+
+#help-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(var(--line-rgb), 0.08);
+}
+
+#help-title {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  flex: 1;
+  text-align: center;
+}
+
+#help-back {
+  background: var(--accent);
+  border: none;
+  color: var(--on-accent);
+  font-weight: 700;
+  border-radius: var(--r-control);
+  padding: 5px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background var(--dur) var(--ease);
+}
+
+#help-back:hover {
+  background: var(--accent-strong);
+}
+
+#help-body {
+  padding-top: 18px;
+  overflow-y: auto;
+  max-height: calc(100vh - 120px);
+}
+
+.help-section {
+  margin-bottom: 22px;
+}
+
+.help-step {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 8px;
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--dim);
+}
+
+.help-step .key {
+  flex: none;
+  min-width: 22px;
+  padding: 0 7px;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+#help-hotkey {
+  min-width: 22px;
+  padding: 0 10px;
+  font-size: 13px;
+  line-height: 22px;
 }
 
 /* 未保存确认弹窗 */

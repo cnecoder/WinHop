@@ -18,6 +18,7 @@
           <span class="header-right">
             <span id="legend"></span>
             <span class="header-sep"></span>
+            <button id="help-btn" data-i18n-title="help" aria-label="帮助">?</button>
             <button id="settings-btn" data-i18n-title="settings" data-i18n="settings">设置</button>
             <span id="hint" data-i18n="escExit">Esc 退出</span>
           </span>
@@ -107,8 +108,53 @@
           <div class="setting-section">
             <div class="setting-group-title" data-i18n="about">关于</div>
             <div id="version-info" class="version-info">版本 …</div>
+            <button id="github-btn" class="setting-row-btn" style="margin-top:10px" data-i18n="githubRepo">GitHub 仓库</button>
             <div class="setting-group-title" style="margin-top:14px" data-i18n="changelog">更新记录</div>
             <div id="changelog" class="changelog"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 帮助页（覆盖层内 F1 / 头部 ? 打开，纯前端视图，不经过 Rust 状态机） -->
+      <div id="help-view" hidden>
+        <div id="help-header">
+          <button id="help-back" data-i18n="helpBack">← 返回</button>
+          <span id="help-title" data-i18n="help">帮助</span>
+        </div>
+        <div id="help-body">
+          <div class="help-section">
+            <div class="setting-group-title" data-i18n="helpOpen">呼出与关闭</div>
+            <div class="help-step"><span id="help-hotkey" class="key"></span><span data-i18n="helpOpenText"></span></div>
+          </div>
+
+          <div class="help-section">
+            <div class="setting-group-title" data-i18n="helpPrograms">第一步：选程序</div>
+            <div class="help-step"><span class="key">A</span><span data-i18n="helpSingle"></span></div>
+            <div class="help-step"><span class="key">ch</span><span data-i18n="helpMulti"></span></div>
+          </div>
+
+          <div class="help-section">
+            <div class="setting-group-title" data-i18n="helpWindows">第二步：选窗口</div>
+            <div class="help-step"><span class="key">1</span><span data-i18n-html="helpWinDigit"></span></div>
+          </div>
+
+          <div class="help-section">
+            <div class="setting-group-title" data-i18n="helpKeys">其它按键</div>
+            <div class="help-step"><span class="key">Space</span><span data-i18n="helpSpace"></span></div>
+            <div class="help-step"><span class="key">↑↓</span><span data-i18n="helpArrows"></span></div>
+            <div class="help-step"><span class="key">PgUp</span><span class="key">PgDn</span><span data-i18n="helpPager"></span></div>
+            <div class="help-step"><span class="key">F2</span><span data-i18n="helpF2"></span></div>
+            <div class="help-step"><span class="key">F11</span><span data-i18n="helpF11"></span></div>
+          </div>
+
+          <div class="help-section">
+            <div class="setting-group-title" data-i18n="helpEdit">绑定代号 / 改名 / 屏蔽</div>
+            <div class="help-step"><span class="key">✎</span><span data-i18n="helpEditText"></span></div>
+          </div>
+
+          <div class="help-section">
+            <div class="setting-group-title" data-i18n="helpMore">更多</div>
+            <div class="help-step"><span class="key">Esc</span><span data-i18n="helpMoreText"></span></div>
           </div>
         </div>
       </div>

@@ -74,8 +74,9 @@ transition: background var(--dur) var(--ease);
 
 覆盖范围（全部已按此实现，新增按钮必须沿用）：
 - 主按钮 `.primary-btn`（设置页保存、弹窗保存）——禁用置灰
-- 头部「设置」`#settings-btn`、行内编辑 `✎` `.edit-btn`
-- 设置页「返回」`#settings-back`、「录制」`#hotkey-btn`、「退出」`#quit-btn`、黑名单「解除」`.blocked-unblock`
+- 头部「设置」`#settings-btn`、头部「?」帮助 `#help-btn`、行内编辑 `✎` `.edit-btn`
+- 设置页「返回」`#settings-back`、「录制」`#hotkey-btn`、「退出」`#quit-btn`、关于区「GitHub 仓库」`#github-btn`、黑名单「解除」`.blocked-unblock`
+- 帮助页「返回」`#help-back`（布局与设置页同构：720px 列、accent 分组标题、`.key` 徽章 + 灰字说明行）
 - 编辑面板「保存」`.confirm-btn`、「屏蔽」`.block-btn`
 - 弹窗「保存/不保存/取消」`.confirm-buttons button`
 

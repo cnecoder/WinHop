@@ -16,9 +16,12 @@ const titleEl = document.getElementById("title");
 const listEl = document.getElementById("list");
 const overlayView = document.getElementById("overlay-view");
 const settingsView = document.getElementById("settings-view");
+const helpView = document.getElementById("help-view");
 const confirmMask = document.getElementById("confirm-mask");
 
 let settingsOpen = false;
+let helpOpen = false; // 帮助页：覆盖层内纯前端视图，不经过 Rust 状态机
+let currentHotkey = "ctrl+space"; // 当前已保存热键（启动/打开设置时同步），帮助页展示
 let state = null;
 let settingsLoaded = null; // 已保存的设置快照，用于判断是否改动
 let blockedState = null; // 设置页黑名单本地暂存（解除不立即生效，保存后统一写入）
@@ -81,6 +84,7 @@ function updateSettingsState() {
 // 打开设置页：拉取设置、填表单、显示版本与更新记录
 async function openSettings() {
   const info = await invoke("get_settings");
+  currentHotkey = info.hotkey || "ctrl+space";
   settingsLoaded = {
     hotkey: info.hotkey || "ctrl+space",
     autostart: !!info.autostart,
@@ -171,6 +175,20 @@ async function openSettings() {
 function closeSettings() {
   settingsOpen = false;
   settingsView.hidden = true;
+  overlayView.hidden = false;
+}
+
+// 帮助页：覆盖层内纯前端视图（Rust 状态机仍停在程序层），Esc/F1/返回回到覆盖层
+function openHelp() {
+  helpOpen = true;
+  document.getElementById("help-hotkey").textContent = prettyHotkey(currentHotkey);
+  overlayView.hidden = true;
+  helpView.hidden = false;
+}
+
+function closeHelp() {
+  helpOpen = false;
+  helpView.hidden = true;
   overlayView.hidden = false;
 }
 
@@ -380,9 +398,21 @@ window.addEventListener("keydown", (e) => {
     // 表单内的按键（radio/checkbox）正常处理，不路由
     return;
   }
+  // 帮助页：纯前端视图，Esc / F1 / 返回按钮关闭，其余键一律不路由给状态机
+  if (helpOpen) {
+    if (e.key === "Escape" || e.key === "F1") {
+      e.preventDefault();
+      closeHelp();
+    }
+    return;
+  }
   // 覆盖层中编辑程序的输入框：按键不参与快捷键路由
   if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
   e.preventDefault();
+  if (e.key === "F1") {
+    openHelp();
+    return;
+  }
   if (e.key === "F2") {
     openSettings();
     return;
@@ -412,6 +442,9 @@ window.addEventListener("keydown", (e) => {
 document.getElementById("settings-btn").addEventListener("click", () => {
   openSettings();
 });
+
+document.getElementById("help-btn").addEventListener("click", openHelp);
+document.getElementById("help-back").addEventListener("click", closeHelp);
 
 document.getElementById("settings-back").addEventListener("click", () => {
   requestCloseSettings();
@@ -732,6 +765,10 @@ document.getElementById("quit-btn").addEventListener("click", () => {
   invoke("quit_app");
 });
 
+document.getElementById("github-btn").addEventListener("click", () => {
+  invoke("open_url", { url: "https://github.com/cnecoder/WinHop" });
+});
+
 function render(s) {
   state = s;
   // 主题以后端配置为准（保存后/启动时同步）
@@ -742,13 +779,15 @@ function render(s) {
     if (settingsOpen) resumeHotkey(); // 覆盖层关闭带走设置页：恢复 suspend 的热键
     settingsOpen = false;
     settingsView.hidden = true;
+    helpOpen = false; // 覆盖层关闭带走帮助页
+    helpView.hidden = true;
     overlayView.hidden = false;
     confirmMask.hidden = true;
     return;
   }
   appEl.style.display = "block";
-  // 设置页打开时不刷新覆盖层（它被隐藏）；关闭设置后由新事件覆盖
-  if (settingsOpen) return;
+  // 设置页/帮助页打开时不刷新覆盖层（它们被隐藏）；关闭后由新事件覆盖
+  if (settingsOpen || helpOpen) return;
   renderHeader(s);
   if (s.phase === "windows") {
     titleEl.textContent = winHint(s);
@@ -841,6 +880,7 @@ invoke("get_settings")
   .then((info) => {
     // lang_cfg：配置保存的语言（空=跟随系统）；lang_sys：系统检测（与用户设置无关）
     sysLang = info.lang_sys || "zh-CN";
+    currentHotkey = info.hotkey || "ctrl+space";
     const saved = info.lang_cfg || ""; // 空 = 跟随系统
     applyLanguage(saved || "system");
   })

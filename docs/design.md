@@ -29,7 +29,7 @@ WebView JS keydown ─invoke("key")─┘        (lib.rs)                       
 ```
 
 - **状态机全在 Rust**（`src-tauri/src/lib.rs`）：`OverlayState`（阶段 `Closed/Programs/Windows`、程序列表、窗口列表、筛选缓冲、选中项、待激活 `pending`、MRU 等）。核心是**纯函数** `OverlayState::transition(msg, &cfg, &mut mru, now, overlay_hwnd, is_visible) -> Effect`——只改自身状态、返回 `Effect{None,Emit,Close,ActivateWindow}`，不碰 Tauri/锁，可直接单测。薄驱动 `handle_key`/`pick_program` 拿锁、clone 一份 cfg 快照调 transition，再由 `apply_effect` 落地（emit/close/轮询激活）。前端只渲染 `Render` 结构、回传按键/点击。
-- **Win32 层**（`src-tauri/src/windows.rs`）：窗口枚举、激活、鼠标钩子、DWM 缩略图、语言/提权/单实例/自启注册表/日志。
+- **Win32 层**（`src-tauri/src/windows.rs`）：窗口枚举、激活、鼠标钩子、DWM 缩略图、语言/提权/单实例/自启注册表/日志/`open_url`（默认浏览器打开链接，限 `https://`；设置页关于区 GitHub 仓库引导）。
 - **配置层**（`src-tauri/src/config.rs`）：`config.json` 加载、迁移、校验、原子保存。
 - **设置页**（`src-tauri/src/settings.rs`）：`get_settings`/`save_settings` 命令、设置 DTO、changelog、热键注册与自启副作用；**热键录制**（`src-tauri/src/hotkey_capture.rs`）：`GetAsyncKeyState` 轮询检测组合键（绕开 IME 吞事件），自包含不依赖状态机。
 - 状态查询用原子量（`visible`、`prev_fg`），共享状态用 `Mutex`；transition 不持锁（驱动层一次性 clone cfg 快照、在锁内取 `&mut mru`），调 `close()` 等会重入取 overlay 锁的路径前先 `drop(ov)`。
@@ -64,7 +64,7 @@ WebView JS keydown ─invoke("key")─┘        (lib.rs)                       
 - **空格**（程序层）：快速跳转到**上一个最近使用**的可见窗口（MRU 前两个里的第二个，两窗互切，类 Alt-Tab 瞬切）。
 - **Esc**：窗口层 → 程序层；程序层若有多字母筛选缓冲先清空，再按才关闭。
 - **热键再按 / 点击覆盖层外部 / 焦点丢失**：关闭（焦点丢失不抢回焦点，见 §7）。
-- `F2` 进设置页，`F11` 切换覆盖层全屏。
+- `F2` 进设置页，`F11` 切换覆盖层全屏，`F1`（或头部「?」）打开内置帮助页。帮助页是覆盖层内的**纯前端视图**（不经过 Rust 状态机，状态机仍停在程序层），Esc/F1/返回关闭。
 
 ## 5. 窗口匹配与切换
 
@@ -152,7 +152,7 @@ MRU 在经 WinHop 切换、呼出时记录前台、以及看门狗线程检测�
 **键盘不走低级钩子**：Chromium 前台用 raw input 收键盘，`WH_KEYBOARD_LL` 完全看不见按键（早期 LL 键盘钩子方案因此废弃）。三条输入路径：
 
 1. **呼出/关闭**：`RegisterHotKey`（系统级，与前台无关）→ 插件 handler → toggle open/close。
-2. **覆盖层内按键**：覆盖层 `set_focus` 夺焦后，WebView JS `keydown` → `invoke("key",{k})` → Rust `key()` → `handle_key()`。前端忽略按住的 repeat 键（字母/数字）。
+2. **覆盖层内按键**：覆盖层 `set_focus` 夺焦后，WebView JS `keydown` → `invoke("key",{k})` → Rust `key()` → `handle_key()`。前端忽略按住的 repeat 键（字母/数字）。`F1` 帮助页打开期间前端截获全部按键（仅 Esc/F1 关闭），不 invoke 状态机；`F2` 设置页同理。
 3. **鼠标**：`WH_MOUSE_LL` 钩子只处理「点击覆盖层外部 → 关闭」（并吞掉该次点击）；**不拦截的事件必须 `CallNextHookEx` 透传**，否则截断其它程序（AHK、鼠标手势）的钩子链。
 
 ### 焦点与关闭

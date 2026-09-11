@@ -968,6 +968,11 @@ fn quit_app(app: AppHandle) {
     app.exit(0);
 }
 
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    windows::open_url(&url)
+}
+
 // 编辑程序（已配置改代号/名称；未配置添加进配置）。按 process 匹配。
 // multi=true 时写 multi_key（多字母代号，1+ 小写字母），否则写 key（单字母）。
 // 代号格式校验：空=清除字母绑定（单字母模式允许，表示解绑）；非空必须全小写，
@@ -1297,6 +1302,7 @@ pub fn run() {
             hotkey_capture::hotkey_capture_poll,
             hotkey_capture::hotkey_capture_stop,
             quit_app,
+            open_url,
             thumb_set,
             thumb_clear,
             toggle_fullscreen,

@@ -882,6 +882,30 @@ pub fn is_elevated() -> bool {
     }
 }
 
+// 用默认浏览器打开 URL（设置页 GitHub 仓库引导）。只允许 https://，防注入其它 ShellExecute 动词。
+pub fn open_url(url: &str) -> Result<(), String> {
+    if !url.starts_with("https://") {
+        return Err("仅允许 https URL".into());
+    }
+    unsafe {
+        let file = to_wide(url);
+        let open = to_wide("open");
+        let empty = to_wide("");
+        let h = ShellExecuteW(
+            std::ptr::null_mut(),
+            open.as_ptr(),
+            file.as_ptr(),
+            empty.as_ptr(),
+            empty.as_ptr(),
+            1,
+        );
+        if h as isize <= 32 {
+            return Err(format!("打开链接失败 {:?}", h));
+        }
+    }
+    Ok(())
+}
+
 pub fn relaunch_elevated() {
     unsafe {
         let exe = std::env::current_exe().expect("获取自身路径失败");
