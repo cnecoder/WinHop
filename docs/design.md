@@ -73,23 +73,30 @@ WebView JS keydown ─invoke("key")─┘        (lib.rs)                       
 `EnumWindows` 遍历，仅计入：`IsWindowVisible` 可见、**非 DWM cloaked**（`DwmGetWindowAttribute(DWMWA_CLOAKED)`——挂起 UWP/后台、其它虚拟桌面的幽灵窗口，可见标记为真但激活不了）、**非 `WS_EX_TOOLWINDOW`**（不进 Alt-Tab 的工具/弹窗，与系统切换器口径一致）、非自身进程、非桌面（`Progman`）/任务栏（`Shell_TrayWnd`）、有标题。每个窗口取进程名（`QueryFullProcessImageNameW`，小写 exe 名）、完整路径、文件说明（版本资源 `FileDescription`，作为显示名）、所在屏幕。
 **黑名单**（`blocked`）命中的进程不计入：系统预置项来自 `system-blocklist.txt`（首次播种一次，`blocked_seeded` 标记后完全交给用户），用户可经 ✎ 编辑面板屏蔽或设置页解除。
 
-#### Chromium PWA（网站安装成应用）独立分组
+#### 浏览器 PWA（网站安装成应用）独立分组
 
-Chrome/Edge 把「安装成应用」的网站（PWA）窗口与普通标签页窗口放在**同一进程**（`chrome.exe`/`msedge.exe`）——且 PWA 进程里也可能同时开着普通浏览窗口，所以**进程级标记不足以逐窗口区分**。判定用两个信号组合（均踩坑实测）：
+Chrome/Edge 把「安装成应用」的网站（PWA）窗口与普通标签页窗口放在**同一进程**（`chrome.exe`/`msedge.exe`）——同一进程还可能同时承载普通浏览窗口、甚至多个不同 PWA，所以**进程级标记不足以逐窗口区分，必须逐窗口读 AUMID**。PWA 有两种安装形态，检测统一在窗口 AUMID 上分类（`classify_pwa`），取名因安装模型不同而分流：
 
-1. **该窗口是否 PWA（窗口级布尔）**：读窗口 AppUserModelID（`SHGetPropertyStoreForWindow` → `IPropertyStore::GetValue(PKEY_AppUserModel_ID)`，fmtid=`9F4C2855-…`、pid=5）。PWA 窗口形如 `Chrome._crx_<id>`/`MSEdge._crx_<id>`，普通窗口是 `Chrome`/`MSEdge`；以是否含 `._crx_` 判定这一个窗口是不是 PWA。
-2. **完整 32 位 app-id**：跨进程读 AUMID 不稳定（实测会得到**缺固定若干字符的截断串**，长度≠32，不能直接用），故完整 id 改取**承载窗口的进程命令行** `--app-id=<32 位>`——经 `NtQueryInformationProcess(ProcessBasicInformation)` 取 PEB → `ProcessParameters->CommandLine`，`ReadProcessMemory` 读出；同进程命令行只需读一次（按 pid 缓存）。命令行缺失时回退 AUMID 后缀（可能截断，但仍能独立成组）。
+1. **crx 形态**（Chrome、旧版 Edge，以及 Brave/Vivaldi/Opera/Arc 等全系 Chromium）：窗口 AppUserModelID（`SHGetPropertyStoreForWindow` → `IPropertyStore::GetValue(PKEY_AppUserModel_ID)`，fmtid=`9F4C2855-…`、pid=5）形如 `Chrome._crx_<32 位 id>`/`MSEdge._crx_<id>`，普通窗口是 `Chrome`/`MSEdge`。跨进程读该 AUMID 实测可能得到**缺固定若干字符的截断串**，故只取 `._crx_` 标记与后缀；完整 32 位 id 改取**承载窗口的进程命令行** `--app-id=<32 位>`——经 `NtQueryInformationProcess(ProcessBasicInformation)` 取 PEB → `ProcessParameters->CommandLine`，`ReadProcessMemory` 读出（按 pid 缓存，每进程读一次）；命令行缺失再回退 AUMID 后缀（可能截断，但仍能独立成组）。
+2. **AppX/MSIX 托管形态**（新版 Edge「安装为应用」）：站点被装成 hosted AppX 包（manifest 声明 `uap10:HostRuntimeDependency=Microsoft.MicrosoftEdge.Stable`、`HostId=PWA`），窗口 AUMID = `<PackageFamilyName>!App`（如 `www.volcengine.com-2DE81424_m5663p5smhvk4!App`），普通窗口仍是 `MSEdge`。此形态跨进程读 AUMID **完整不截断**，直接以 PFN 为键；但宿主 msedge 进程命令行**裸空**（无 `--app-id`），PEB 路径无效。仅对 `msedge.exe` 认 `!App` 后缀（排除宿主自身 `…!MSEDGE`），避免误伤。
 
 实现要点：
 
 - 枚举固定跑在**新建的 STA 线程**（`CoInitializeEx(COINIT_APARTMENTTHREADED)`）：调用方线程（Tauri 运行时线程可能已是 MTA）套间不可控，MTA 下跨进程 AUMID 读回空。
 - **不得释放** AUMID 返回的 `pwszVal`（不 `CoTaskMemFree`/`PropVariantClear`）——它指向目标进程属性存储内部缓冲；Release store 前直接拷贝。
 
-PWA 窗口分组键改写为虚拟进程 `pwa#<app-id>`（而非 exe 名），每个 PWA 独立成一个程序，同进程的普通窗口仍归 `chrome.exe`/`msedge.exe`。PWA 显示名来自浏览器 profile 的 `User Data\<Profile>\Web Applications\_crx_<app-id>\<名>.lnk` 主文件名（首次枚举扫描 Chrome/Edge 全部 profile，缓存）；缺失时回退 `PWA <app-id>`。前端程序行副标题对 `pwa#` 键只显示 `PWA`，不泄露内部 id。
+两种形态的窗口分组键都改写为虚拟进程 `pwa#<key>`（而非 exe 名），每个 PWA 独立成一个程序，同进程的普通窗口仍归 `chrome.exe`/`msedge.exe`；key 为 32 位小写即 crx，否则是 AppX 的 PFN。显示名分流解析：
+
+- **crx**：浏览器 profile 的 `User Data\<Profile>\Web Applications\_crx_<id>\<名>.lnk` 主文件名（首次枚举扫描 Chrome/Edge 全部 profile，缓存）。
+- **AppX**：由 PFN 查注册表 `HKCU\Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppModel\Repository\Families\<PFN>` 的子键得 PackageFullName，再非提权直读 `C:\Program Files\WindowsApps\<PackageFullName>\AppxManifest.xml` 的首个 `<Properties><DisplayName>`（内联字面量，做最小 XML 实体解码；遇 `ms-resource:` 占位则放弃），按 PFN 缓存。
+
+取名都失败时回退该 PWA 窗口标题（PWA 标题即应用名），再退 `PWA <key>`。前端程序行副标题对 `pwa#` 键只显示 `PWA`，不泄露内部 id/PFN。
+
+**覆盖面**：Chrome、新 Edge(AppX)、旧 Edge(crx) 全覆盖并自动取名；Brave/Vivaldi/Opera/Arc 等 Chromium 浏览器 crx 检测/分组/激活同源可用，但取名只扫 Chrome/Edge 的 User Data，其余回退窗口标题。Firefox 无窗口化 PWA 支持（SSB 已移除），普通 firefox.exe 窗口无独立 AUMID，无法区分，不在覆盖内。
 
 ### 匹配
 
-按**分组键**匹配配置条目（`process`，统一小写）：普通程序是 exe 名，Chromium PWA 是 `pwa#<app-id>`（见上）。不做标题正则。限制：无法区分同进程的不同 profile（如 Chrome 多 profile），接受。
+按**分组键**匹配配置条目（`process`，统一小写）：普通程序是 exe 名，浏览器 PWA 是 `pwa#<key>`（crx 为 32 位 app-id，AppX 为 PackageFamilyName，见上）。不做标题正则。限制：无法区分同进程的不同 profile（如 Chrome 多 profile），接受。
 
 ### 窗口排序（窗口层）
 

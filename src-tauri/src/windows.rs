@@ -28,8 +28,8 @@ use windows_sys::Win32::Storage::FileSystem::{
 };
 use windows_sys::Win32::System::Console::{SetStdHandle, STD_ERROR_HANDLE};
 use windows_sys::Win32::System::Registry::{
-    RegCloseKey, RegCreateKeyExW, RegDeleteValueW, RegSetValueExW, HKEY, HKEY_CURRENT_USER,
-    KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_SZ,
+    RegCloseKey, RegCreateKeyExW, RegDeleteValueW, RegEnumKeyExW, RegOpenKeyExW, RegSetValueExW,
+    HKEY, HKEY_CURRENT_USER, KEY_READ, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_SZ,
 };
 use windows_sys::Win32::System::Threading::{
     CreateMutexW, GetCurrentProcess, GetCurrentProcessId, GetCurrentThreadId, OpenProcess,
@@ -190,6 +190,34 @@ fn pwa_app_id(cmdline: &str) -> Option<&str> {
     }
 }
 
+// PWA 两种安装形态（同一窗口 AUMID 信号统一分类）：
+// - crx：Chrome（及旧版 Edge、Brave/Vivaldi/Opera/Arc 等全系 Chromium）。窗口 AUMID
+//   形如 "<宿主>._crx_<32 位 id>"；同进程可同时承载普通浏览窗口，须按窗口判定。
+// - AppX：新版 Edge「安装为应用」装成 hosted MSIX 包（manifest 声明
+//   HostRuntimeDependency=Microsoft.MicrosoftEdge.Stable）。窗口 AUMID =
+//   "<PackageFamilyName>!App"，宿主 msedge 进程命令行裸空（PEB 取 id 无效），
+//   只能靠 AUMID；同进程可承载多个不同 PWA 包，仍按窗口判定。
+// 入参为窗口 AUMID 与小写 exe 名；返回分组键（PWA_PROC_PREFIX 之后的部分），非 PWA 返回 None。
+fn classify_pwa(aumid: &str, exe: &str) -> Option<String> {
+    // 分组键统一小写：配置读取会把 process 归一化为小写、普通 exe 名本就小写；
+    // AppX 的 PackageFamilyName 含大写十六进制（如 …-2DE81424_…），不归一化会导致
+    // 配置的 PWA 代号/名称匹配不上枚举窗口。
+    if let Some(id) = aumid.split("._crx_").nth(1) {
+        if !id.is_empty() {
+            return Some(id.to_lowercase());
+        }
+    }
+    if exe == "msedge.exe" {
+        let pfn = aumid.strip_suffix("!App")?;
+        // 排除基础宿主 AUMID（…!MSEDGE 不以 !App 结尾，本就不命中）；PFN 必须含
+        // 发布者哈希段（name_hash），避免把普通短串误判成包
+        if pfn.contains('_') && pfn != "MSEdge" {
+            return Some(pfn.to_lowercase());
+        }
+    }
+    None
+}
+
 // 读远程进程命令行：NtQueryInformationProcess 取 PEB → ProcessParameters(x64 0x20)
 // → CommandLine UNICODE_STRING(x64 0x70) → ReadProcessMemory。任何失败返回 None
 // （退回普通按 exe 分组）。不走窗口 AUMID：实测跨进程 SHGetPropertyStoreForWindow
@@ -343,9 +371,144 @@ fn scan_user_data(base: &std::path::Path, map: &mut HashMap<String, String>) {
     }
 }
 
-// 供 lib.rs 取 PWA 显示名（未找到快捷方式时由调用方回退）
-pub fn pwa_app_name(app_id: &str) -> Option<String> {
-    pwa_names().get(app_id).cloned()
+// AppX（Edge 托管 PWA）显示名缓存：PackageFamilyName → 显示名。包安装后名不变，
+// 进程内缓存即可；只缓存命中项（未安装包罕见，重复读 manifest 代价可接受）。
+fn appx_name_cache() -> &'static std::sync::Mutex<HashMap<String, String>> {
+    static CACHE: OnceLock<std::sync::Mutex<HashMap<String, String>>> = OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
+// 由 PackageFamilyName 经包仓库注册表解析 PackageFullName（含版本/架构/发布者哈希）。
+// HKCU\…\AppModel\Repository\Families\<PFN> 下每个子键是一个已安装版本的完整包名。
+fn appx_package_full_name(pfn: &str) -> Option<String> {
+    unsafe {
+        let sub = to_wide(&format!(
+            "Software\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\Repository\\Families\\{}",
+            pfn
+        ));
+        let mut fam: HKEY = std::ptr::null_mut();
+        if RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            sub.as_ptr(),
+            0,
+            KEY_READ,
+            &mut fam,
+        ) != 0
+            || fam.is_null()
+        {
+            return None;
+        }
+        let mut full = None;
+        let mut buf = [0u16; 260];
+        for i in 0.. {
+            let mut len = buf.len() as u32;
+            let rc = RegEnumKeyExW(
+                fam,
+                i,
+                buf.as_mut_ptr(),
+                &mut len,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            );
+            if rc != 0 {
+                break; // 259=ERROR_NO_MORE_ITEMS
+            }
+            full = Some(String::from_utf16_lossy(&buf[..len as usize]));
+            break; // 通常只装一个版本，取首个即可
+        }
+        RegCloseKey(fam);
+        full
+    }
+}
+
+// 从 AppxManifest.xml 取包显示名。托管 Web 应用包的 <Properties><DisplayName> 为内联
+// 字面量（非 ms-resource），且位于 <Applications> 之前——取首个 <DisplayName> 即包名。
+// 纯函数，便于单测。
+fn extract_manifest_display_name(xml: &str) -> Option<String> {
+    let start_tag = xml.find("<DisplayName")?;
+    let open_end = start_tag + xml[start_tag..].find('>')? + 1;
+    let close = xml[open_end..].find("</DisplayName>")? + open_end;
+    let raw = xml[open_end..close].trim();
+    if raw.is_empty() || raw.starts_with("ms-resource:") {
+        return None;
+    }
+    Some(decode_xml_entities(raw))
+}
+
+// 最小 XML 实体解码（托管包 DisplayName 可能用 &#xXXXX; 数字字符引用与 &amp; 等）。
+// 按 UTF-8 字符切片处理，不能逐字节拷贝（显示名常含中文）。
+fn decode_xml_entities(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(amp) = rest.find('&') {
+        out.push_str(&rest[..amp]);
+        let semi_rel = rest[amp + 1..].find(';');
+        match semi_rel {
+            Some(rel) => {
+                let semi = amp + 1 + rel;
+                let ent = &rest[amp + 1..semi];
+                let ch = if let Some(hex) = ent.strip_prefix("#x").or_else(|| ent.strip_prefix("#X"))
+                {
+                    u32::from_str_radix(hex, 16).ok().and_then(char::from_u32)
+                } else if let Some(dec) = ent.strip_prefix('#') {
+                    dec.parse::<u32>().ok().and_then(char::from_u32)
+                } else {
+                    match ent {
+                        "amp" => Some('&'),
+                        "lt" => Some('<'),
+                        "gt" => Some('>'),
+                        "quot" => Some('"'),
+                        "apos" => Some('\''),
+                        _ => None,
+                    }
+                };
+                match ch {
+                    Some(c) => out.push(c),
+                    None => out.push_str(&rest[amp..=semi]), // 识别不了原样保留
+                }
+                rest = &rest[semi + 1..];
+            }
+            None => {
+                out.push('&');
+                rest = &rest[amp + 1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+fn appx_app_name(pfn: &str) -> Option<String> {
+    if let Some(n) = appx_name_cache().lock().unwrap().get(pfn) {
+        return Some(n.clone());
+    }
+    let full = appx_package_full_name(pfn)?;
+    let programfiles = std::env::var("ProgramW6432")
+        .or_else(|_| std::env::var("ProgramFiles"))
+        .ok()?;
+    let manifest = std::path::Path::new(&programfiles)
+        .join("WindowsApps")
+        .join(&full)
+        .join("AppxManifest.xml");
+    let xml = std::fs::read_to_string(&manifest).ok()?;
+    let name = extract_manifest_display_name(&xml)?;
+    appx_name_cache()
+        .lock()
+        .unwrap()
+        .insert(pfn.to_string(), name.clone());
+    Some(name)
+}
+
+// 供 lib.rs 取 PWA 显示名。key=32 位小写 crx id 走浏览器快捷方式名；其余（含下划线与
+// 发布者哈希的 PackageFamilyName）走 AppX 包清单名。未找到时由调用方回退窗口标题/id。
+pub fn pwa_app_name(key: &str) -> Option<String> {
+    if key.len() == 32 && key.bytes().all(|b| b.is_ascii_lowercase()) {
+        pwa_names().get(key).cloned()
+    } else {
+        appx_app_name(key)
+    }
 }
 
 #[derive(Debug)]
@@ -536,33 +699,28 @@ unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
     }
     let ctx = &mut *(lparam as *mut EnumCtx);
     let (mut process, path) = process_name(hwnd);
-    // Chromium PWA 判定（窗口级）：PWA 进程会同时承载普通浏览窗口，不能只按进程
-    // 命令行分组。先用窗口 AUMID 的 "._crx_" 标记确认「这个窗口」是 PWA，再取
-    // 完整 app-id——优先进程命令行 --app-id（完整可靠），缺失时回退 AUMID 后缀。
+    // PWA 判定（窗口级，统一两种形态）：浏览器进程会同时承载普通窗口/多个 PWA，不能按进程
+    // 分组，逐窗口读 AUMID 分类（classify_pwa）：
+    // - crx（Chrome 等）：AUMID "<宿主>._crx_<id>"，跨进程读可能截断 → 优先进程命令行
+    //   --app-id 补全完整 32 位 id，缺失再回退 AUMID 后缀（仍独立成组）。
+    // - AppX（新版 Edge）：AUMID "<PFN>!App"，宿主进程命令行裸空，直接以 PFN 为键。
     if matches!(process.as_str(), "chrome.exe" | "msedge.exe") {
-        // 窗口 AUMID：PWA 窗口形如 "<宿主>._crx_<id>"（跨进程读可能被截断，仅取标记/后缀）
-        let aumid = window_aumid(hwnd);
-        let is_pwa_window = aumid.as_deref().is_some_and(|a| a.contains("._crx_"));
-        if is_pwa_window {
-            if !ctx.app_ids.contains_key(&own_pid) {
-                let id = process_command_line(own_pid)
-                    .and_then(|cmd| pwa_app_id(&cmd).map(str::to_string))
-                    .unwrap_or_default();
-                ctx.app_ids.insert(own_pid, id);
-            }
-            // 完整 id 优先进程命令行；缺失则回退本窗口 AUMID 后缀（可能截断，但仍独立成组）
-            let cmd_id = ctx.app_ids.get(&own_pid).map(String::as_str).unwrap_or("");
-            let id = if !cmd_id.is_empty() {
-                cmd_id.to_string()
-            } else {
-                aumid
-                    .as_deref()
-                    .and_then(|a| a.split("._crx_").nth(1))
-                    .unwrap_or("")
-                    .to_string()
-            };
-            if !id.is_empty() {
-                process = format!("{}{}", PWA_PROC_PREFIX, id);
+        if let Some(aumid) = window_aumid(hwnd) {
+            let is_crx = aumid.contains("._crx_");
+            if let Some(mut key) = classify_pwa(&aumid, &process) {
+                if is_crx {
+                    if !ctx.app_ids.contains_key(&own_pid) {
+                        let id = process_command_line(own_pid)
+                            .and_then(|cmd| pwa_app_id(&cmd).map(str::to_string))
+                            .unwrap_or_default();
+                        ctx.app_ids.insert(own_pid, id);
+                    }
+                    let cmd_id = ctx.app_ids.get(&own_pid).map(String::as_str).unwrap_or("");
+                    if !cmd_id.is_empty() {
+                        key = cmd_id.to_string();
+                    }
+                }
+                process = format!("{}{}", PWA_PROC_PREFIX, key);
             }
         }
     }
@@ -1399,5 +1557,82 @@ mod tests {
         assert_eq!(pwa_app_id("chrome.exe --app-id=short"), None);
         assert_eq!(pwa_app_id("chrome.exe --app-id=MJOKLPLBDDABCMPEPNOKJAFFBMGKKGG"), None);
         assert_eq!(pwa_app_id("anything"), None);
+    }
+
+    #[test]
+    fn pwa_classify_distinguishes_forms() {
+        // crx 形态：Chrome / 旧 Edge，取 ._crx_ 后缀（可能截断，命令行补全在枚举侧）
+        assert_eq!(
+            classify_pwa("Chrome._crx_mjoklplbddabcmpepnokjaffbmgbkkgg", "chrome.exe"),
+            Some("mjoklplbddabcmpepnokjaffbmgbkkgg".to_string())
+        );
+        assert_eq!(
+            classify_pwa("MSEdge._crx_agimnkijcaahngcdmfeangaknmldooml", "msedge.exe"),
+            Some("agimnkijcaahngcdmfeangaknmldooml".to_string())
+        );
+        // AppX 形态：新版 Edge，AUMID=<PFN>!App，取完整 PFN 并归一为小写
+        //（PFN 含大写十六进制；注册表/文件路径大小写不敏感，但配置匹配要求小写）
+        assert_eq!(
+            classify_pwa("www.volcengine.com-2DE81424_m5663p5smhvk4!App", "msedge.exe"),
+            Some("www.volcengine.com-2de81424_m5663p5smhvk4".to_string())
+        );
+        // 普通浏览窗口不是 PWA
+        assert_eq!(classify_pwa("Chrome", "chrome.exe"), None);
+        assert_eq!(classify_pwa("MSEdge", "msedge.exe"), None);
+        // Edge 宿主自身 AUMID 以 !MSEDGE 结尾（非 !App），不命中
+        assert_eq!(
+            classify_pwa(
+                "Microsoft.MicrosoftEdge.Stable_8wekyb3d8bbwe!MSEDGE",
+                "msedge.exe"
+            ),
+            None
+        );
+        // 非 Edge 进程不得仅凭 !App 后缀判成 PWA
+        assert_eq!(classify_pwa("whatever!App", "chrome.exe"), None);
+        // crx 后缀为空不命中
+        assert_eq!(classify_pwa("Chrome._crx_", "chrome.exe"), None);
+    }
+
+    #[test]
+    fn manifest_display_name_extracts_first_prop() {
+        let xml = r#"<?xml version="1.0"?>
+<Package xmlns="x"><Properties>
+ <DisplayName>&#x65B9;&#x821F; Agent Plan</DisplayName>
+ <PublisherDisplayName>www.volcengine.com</PublisherDisplayName>
+</Properties>
+<Applications><Application Id="App">
+ <uap:VisualElements DisplayName="&#x65B9;&#x821F; Agent Plan &amp; co"/>
+</Application></Applications></Package>"#;
+        // 首个 <DisplayName> 在 <Properties>，内联字面量 + 数字字符引用解码
+        assert_eq!(
+            extract_manifest_display_name(xml),
+            Some("方舟 Agent Plan".to_string())
+        );
+        // ms-resource 占位名不可直接用 → None（交由回退）
+        assert_eq!(
+            extract_manifest_display_name("<Properties><DisplayName>ms-resource:AppName</DisplayName></Properties>"),
+            None
+        );
+        assert_eq!(extract_manifest_display_name("<nope/>"), None);
+        // 命名实体
+        assert_eq!(
+            decode_xml_entities("a&amp;b&lt;c&quot;d"),
+            "a&b<c\"d".to_string()
+        );
+    }
+
+    // 集成：本机装有 Edge 托管 PWA（AppX）时，PFN 经注册表 Families→包清单应取到非空名。
+    // CI/未装环境显式 SKIP，不空转绿。
+    #[test]
+    fn appx_name_resolves_when_edge_pwa_installed() {
+        let pfn = "www.volcengine.com-2DE81424_m5663p5smhvk4";
+        if appx_package_full_name(pfn).is_none() {
+            eprintln!("SKIP: 未安装 Edge 托管 PWA 包 {}，appx 取名链未验证", pfn);
+            return;
+        }
+        let name = appx_app_name(pfn).expect("已装包应取到清单显示名");
+        assert!(!name.is_empty());
+        assert!(!name.starts_with("ms-resource:"));
+        eprintln!("appx 名: {}", name);
     }
 }

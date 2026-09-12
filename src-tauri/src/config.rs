@@ -560,6 +560,35 @@ mod tests {
     }
 
     #[test]
+    fn pwa_program_keys_roundtrip_and_match() {
+        // PWA 虚拟进程键含 # . - _ 等字符（crx 为 32 位 id，AppX 为 PackageFamilyName），
+        // 配置存取只能做大小写归一，不得因字符集破坏键；归一后须仍与枚举产生的键精确相等。
+        let dir = std::env::temp_dir().join(format!("winhop_test_pwa_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.json");
+        let crx = "pwa#mjoklplbddabcmpepnokjaffbmgbkkgg";
+        let appx = "pwa#www.volcengine.com-2de81424_m5663p5smhvk4"; // 故意混大写验归一
+        let json = format!(
+            r#"{{"hotkey":"ctrl+space","programs":[
+                {{"key":"g","multi_key":"","name":"GitHub","process":"{}"}},
+                {{"key":"","multi_key":"fz","name":"方舟","process":"{}"}}
+            ],"blocked":[],"blocked_seeded":true}}"#,
+            crx, appx
+        );
+        std::fs::write(&path, json).unwrap();
+        let cfg = read_cfg(&path);
+        assert_eq!(cfg.programs.len(), 2);
+        // 枚举侧对 AppX 产生的键（全小写 PFN）
+        let enum_appx = "pwa#www.volcengine.com-2DE81424_m5663p5smhvk4".to_lowercase();
+        let procs: Vec<&str> = cfg.programs.iter().map(|p| p.process.as_str()).collect();
+        assert!(procs.contains(&crx));
+        assert!(procs.contains(&enum_appx.as_str()));
+        assert_eq!(cfg.programs[0].key, "g");
+        assert_eq!(cfg.programs[1].multi_key, "fz");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn blocked_untagged_deserializes_both_forms() {
         let c: Config = serde_json::from_str(
             r#"{"hotkey":"ctrl+space","programs":[],
