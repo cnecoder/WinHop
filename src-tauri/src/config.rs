@@ -101,6 +101,11 @@ pub struct Config {
     /// 界面语言："zh-CN"/"en"，空串为跟随系统（默认）
     #[serde(default)]
     pub lang: String,
+    /// 用户偏好的每页卡片数（设置页 8–64 可填）。实际生效页长由前端按屏幕高度
+    /// 反推可行区间后钳制（set_page_size，仅本次运行不持久化），保证卡片缩放
+    /// 始终在 0.75–1.35 内且铺满屏幕
+    #[serde(default = "default_prog_page_size")]
+    pub prog_page_size: usize,
     pub programs: Vec<Program>,
     /// 黑名单：命中的程序不进入列表。
     /// 首次/老配置播种 system-blocklist.txt 的系统默认项，之后完全由用户控制（设置页可解除）。
@@ -164,6 +169,15 @@ fn default_blocked() -> Vec<Blocked> {
         .collect()
 }
 
+/// 每页卡片数设置下限
+pub const PROG_PAGE_SIZE_MIN: usize = 8;
+/// 每页卡片数设置上限（sanity 绝对区间；实际生效值受屏幕可行区间钳制，见前端 pageSizeBounds）
+pub const PROG_PAGE_SIZE_MAX: usize = 64;
+
+fn default_prog_page_size() -> usize {
+    20
+}
+
 fn default_true() -> bool {
     true
 }
@@ -185,6 +199,7 @@ impl Default for Config {
             theme: default_theme(),
             win_digit_mode: WinDigitMode::default(),
             lang: String::new(),
+            prog_page_size: default_prog_page_size(),
             programs: Vec::new(),
             blocked: Vec::new(),
             blocked_seeded: true,
@@ -425,6 +440,14 @@ fn validate(cfg: &mut Config) {
         eprintln!("[winhop] 配置 lang 无效「{}」，回退为跟随系统", cfg.lang);
         cfg.lang = String::new();
     }
+    // 每页卡片数：超界钳制到 [MIN, MAX]（非法不 panic，避免手改 config 起不来）
+    if (PROG_PAGE_SIZE_MIN..=PROG_PAGE_SIZE_MAX).contains(&cfg.prog_page_size) == false {
+        eprintln!(
+            "[winhop] 配置 prog_page_size 无效「{}」，钳制到 {}..={}",
+            cfg.prog_page_size, PROG_PAGE_SIZE_MIN, PROG_PAGE_SIZE_MAX
+        );
+        cfg.prog_page_size = cfg.prog_page_size.clamp(PROG_PAGE_SIZE_MIN, PROG_PAGE_SIZE_MAX);
+    }
     let mut seen_key = std::collections::HashSet::new();
     let mut seen_mk = std::collections::HashSet::new();
     for p in &cfg.programs {
@@ -586,6 +609,26 @@ mod tests {
         assert_eq!(cfg.programs[0].key, "g");
         assert_eq!(cfg.programs[1].multi_key, "fz");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn prog_page_size_defaults_and_clamps() {
+        // 缺字段反序列化 → 默认 20
+        let cfg: Config =
+            serde_json::from_str(r#"{"hotkey":"ctrl+space","programs":[]}"#).unwrap();
+        assert_eq!(cfg.prog_page_size, 20);
+        // 合法值保留
+        let mut cfg = minimal_cfg();
+        cfg.prog_page_size = 12;
+        validate(&mut cfg);
+        assert_eq!(cfg.prog_page_size, 12);
+        // 超界钳制（含 0）
+        for (bad, want) in [(0, 8), (7, 8), (65, 64), (1000, 64)] {
+            let mut c = minimal_cfg();
+            c.prog_page_size = bad;
+            validate(&mut c);
+            assert_eq!(c.prog_page_size, want, "bad={}", bad);
+        }
     }
 
     #[test]

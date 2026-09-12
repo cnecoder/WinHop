@@ -64,6 +64,17 @@
           </div>
 
           <div class="setting-section">
+            <div class="setting-group-title" data-i18n="setPageSize">每页卡片数</div>
+            <div class="pagesize-row">
+              <button type="button" id="pagesize-dec" class="pagesize-btn">−</button>
+              <span id="pagesize-value" class="pagesize-value">20</span>
+              <button type="button" id="pagesize-inc" class="pagesize-btn">+</button>
+              <button type="button" id="pagesize-reset" class="setting-row-btn pagesize-reset-btn" data-i18n="pageSizeReset">重置（本屏推荐）</button>
+            </div>
+            <div class="pagesize-hint" data-i18n="pageSizeHint">偏好数量；步进范围随当前屏幕自动限定（卡片等比缩放、铺满屏幕且不过大/过小）</div>
+          </div>
+
+          <div class="setting-section">
             <div class="setting-group-title" data-i18n="setMode">模式</div>
             <label class="setting-row">
               <input type="radio" name="mode" value="single" checked />

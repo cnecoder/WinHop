@@ -61,6 +61,22 @@ body {
   overflow: hidden;
 }
 
+/* 覆盖层缩放令牌：--ui-scale 由 main.js 按列表可用高度与每页卡片数计算后写入，
+   仅覆盖层程序/窗口两层消费；设置页、帮助页在 #overlay-view 之外，尺寸固定不受影响 */
+#overlay-view {
+  --ui-scale: 1;
+  --card-h: calc(40px * var(--ui-scale));
+  --card-gap: calc(4px * var(--ui-scale));
+  --row-fs: calc(16px * var(--ui-scale));
+  --row-px: calc(6px * var(--ui-scale)) calc(12px * var(--ui-scale));
+  --key-slot-w: calc(52px * var(--ui-scale));
+  --key-min-w: calc(26px * var(--ui-scale));
+  --key-fs: calc(16px * var(--ui-scale));
+  --wlist-w: calc(420px * var(--ui-scale));
+  --wrow-fs: calc(15px * var(--ui-scale));
+  --wpreview-pad: calc(14px * var(--ui-scale));
+}
+
 #app {
   display: none;
   width: 100vw;
@@ -166,25 +182,25 @@ body {
   display: flex;
   align-items: center;
   gap: 16px;
-  padding: 6px 12px;
+  padding: var(--row-px);
   border-radius: var(--r-row);
-  font-size: 16px;
+  font-size: var(--row-fs);
   transition: background var(--dur) var(--ease);
 }
 
-/* 程序层：占满视口剩余高度；卡片固定行高、从上到下排列，
-   每页最多 20 个（不足 20 顶部对齐，不居中/不拉伸）。
+/* 程序层：占满视口剩余高度；卡片行高=--card-h、从上到下排列，
+   每页 N 个由设置决定（不足 N 顶部对齐，不居中/不拉伸），--ui-scale 保证 N 行完整放得下。
    不设 overflow:hidden——长代号徽章向左溢出槽位、探进 app 左 padding，裁了会截断代号 */
 #list:not(.window-layer) {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--card-gap);
   height: calc(100vh - 124px);
 }
 
 #list:not(.window-layer) .row {
   flex: 0 0 auto;
-  height: 40px;
+  height: var(--card-h);
 }
 
 /* 模式徽章：紧贴 WinHop 标题右侧 */
@@ -315,11 +331,17 @@ body {
 /* 程序行代号槽：固定宽，软件名始终从槽右沿对齐；徽章右对齐在槽内，
    短代号居槽右、超长代号（>5 字符）向左延伸，不截断也不顶乱名字列 */
 .row .key-slot {
-  flex: 0 0 52px;
-  width: 52px;
+  flex: 0 0 var(--key-slot-w);
+  width: var(--key-slot-w);
   display: inline-flex;
   align-items: center;
   justify-content: flex-end;
+}
+
+/* 程序层/窗口层列表内的代号/序号徽章随 --ui-scale 缩放；header 图例里的 .key 不受影响 */
+#list .key {
+  min-width: var(--key-min-w);
+  font-size: var(--key-fs);
 }
 
 .row .key-slot .key {
@@ -575,7 +597,7 @@ body {
 }
 
 .wlist {
-  width: 420px;
+  width: var(--wlist-w);
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -595,7 +617,7 @@ body {
   gap: 6px;
   padding: 8px 10px;
   border-radius: var(--r-row);
-  font-size: 15px;
+  font-size: var(--wrow-fs);
   cursor: pointer;
   transition: background var(--dur) var(--ease);
 }
@@ -636,7 +658,7 @@ body {
   border-radius: var(--r-panel);
   border: 1px solid rgba(var(--accent-rgb), 0.3);
   overflow: hidden;
-  padding: 14px;
+  padding: var(--wpreview-pad);
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
 }
 
@@ -778,6 +800,66 @@ body {
 
 .setting-row-btn:hover {
   background: var(--accent-strong);
+}
+
+/* 每页卡片数步进器：accent 实心小按钮 + 等宽数值，到上下限置灰 */
+.pagesize-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.pagesize-btn {
+  background: var(--accent);
+  border: none;
+  color: var(--on-accent);
+  font-weight: 700;
+  border-radius: var(--r-control);
+  width: 30px;
+  height: 26px;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background var(--dur) var(--ease);
+}
+
+.pagesize-btn:not(:disabled):hover {
+  background: var(--accent-strong);
+}
+
+.pagesize-btn:disabled {
+  background: rgba(var(--line-rgb), 0.12);
+  color: var(--dim);
+  cursor: default;
+}
+
+.pagesize-value {
+  min-width: 2.2em;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+/* 重置：与步进钮同高（26px）的紧凑实心按钮，不折行、不被挤压，三个控件一排一体 */
+.pagesize-reset-btn {
+  margin-left: 10px;
+  height: 26px;
+  padding: 0 14px;
+  font-size: 12px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+}
+
+/* 说明独占一行，与「全局热键」区 hint 同款 */
+.pagesize-hint {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--dim);
+  line-height: 1.5;
 }
 
 .version-info {

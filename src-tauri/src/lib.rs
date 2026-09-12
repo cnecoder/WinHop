@@ -24,9 +24,6 @@ enum Phase {
     Windows,
 }
 
-// 程序层每页显示数量（超过则 PageUp/PageDown 翻页）
-const PROG_PAGE_SIZE: usize = 20;
-
 #[derive(Clone)]
 struct ProgEntry {
     /// 单字母模式代号（空表示仅多字母配置）
@@ -53,6 +50,9 @@ struct OverlayState {
     pending: isize,
     digit_buf: String,
     switched: bool,
+    /// 本次运行生效的每页卡片数（前端按屏幕高度反推可行区间后下发）。
+    /// 0 = 未下发，用 cfg.prog_page_size；不持久化，每次呼出重新协商
+    eff_page_size: usize,
 }
 
 impl Default for OverlayState {
@@ -71,8 +71,30 @@ impl Default for OverlayState {
             pending: 0,
             digit_buf: String::new(),
             switched: false,
+            eff_page_size: 0,
         }
     }
+}
+
+// 生效页长：前端按屏幕下发过则用之，否则用配置值
+fn effective_page_size(ov: &OverlayState, cfg_page_size: usize) -> usize {
+    if ov.eff_page_size > 0 {
+        ov.eff_page_size
+    } else {
+        cfg_page_size
+    }
+}
+
+// 前端按屏幕高度反推的运行时页长（仅本次运行，不写配置）；随后重发渲染让分页即时对齐
+#[tauri::command]
+fn set_page_size(app: AppHandle, n: usize) {
+    let inner = app.state::<Inner>();
+    if !(config::PROG_PAGE_SIZE_MIN..=config::PROG_PAGE_SIZE_MAX).contains(&n) {
+        return;
+    }
+    let mut ov = inner.overlay.lock().unwrap();
+    ov.eff_page_size = n;
+    emit(&app, &inner, &ov);
 }
 
 struct Inner {
@@ -114,6 +136,8 @@ struct Render {
     multi_letter: bool,
     theme: String,
     win_digit_mode: String,
+    /// 程序层每页卡片数（前端据此与列表可用高度计算卡片缩放）
+    prog_page_size: usize,
     filter: String,
     programs: Vec<ProgramUi>,
     windows: Vec<WindowUi>,
@@ -134,6 +158,7 @@ impl Render {
             multi_letter: cfg.multi_letter,
             theme: cfg.theme.clone(),
             win_digit_mode: cfg.win_digit_mode.as_str().into(),
+            prog_page_size: cfg.prog_page_size,
             filter: String::new(),
             programs: Vec::new(),
             windows: Vec::new(),
@@ -304,7 +329,8 @@ impl OverlayState {
                         let len = view.len() as isize;
                         let new_pos = ((pos as isize + delta + len) % len) as usize;
                         self.prog_sel = view[new_pos];
-                        self.sync_page(cfg.multi_letter);
+                        let ps = effective_page_size(self, cfg.prog_page_size);
+                        self.sync_page(cfg.multi_letter, ps);
                         Effect::Emit
                     }
                     Phase::Windows if !self.wins.is_empty() => {
@@ -323,8 +349,9 @@ impl OverlayState {
                 if view.is_empty() {
                     return Effect::None;
                 }
-                let page_count = view.len().div_ceil(PROG_PAGE_SIZE);
-                let cur = self.prog_sel / PROG_PAGE_SIZE;
+                let ps = effective_page_size(self, cfg.prog_page_size);
+                let page_count = view.len().div_ceil(ps);
+                let cur = self.prog_sel / ps;
                 let new_page = if matches!(msg, HookMsg::PageDown) {
                     (cur + 1).min(page_count - 1)
                 } else if cur == 0 {
@@ -333,8 +360,8 @@ impl OverlayState {
                     cur - 1
                 };
                 self.prog_page = new_page;
-                let start = new_page * PROG_PAGE_SIZE;
-                let end = (start + PROG_PAGE_SIZE).min(view.len());
+                let start = new_page * ps;
+                let end = (start + ps).min(view.len());
                 let page_items = &view[start..end];
                 if !page_items.contains(&self.prog_sel) {
                     self.prog_sel = if matches!(msg, HookMsg::PageDown) {
@@ -475,10 +502,10 @@ impl OverlayState {
         }
     }
 
-    fn sync_page(&mut self, multi: bool) {
+    fn sync_page(&mut self, multi: bool, page_size: usize) {
         let view = view_indices(self, multi);
         if let Some(pos) = view.iter().position(|&i| i == self.prog_sel) {
-            self.prog_page = pos / PROG_PAGE_SIZE;
+            self.prog_page = pos / page_size;
         }
     }
 
@@ -500,7 +527,8 @@ impl OverlayState {
             return Effect::None;
         };
         self.prog_sel = idx;
-        self.sync_page(cfg.multi_letter);
+        let ps = effective_page_size(self, cfg.prog_page_size);
+        self.sync_page(cfg.multi_letter, ps);
         self.select_entry(&entry, cfg, mru, now)
     }
 
@@ -590,10 +618,11 @@ fn emit(app: &AppHandle, inner: &Inner, ov: &OverlayState) {
     let visible = inner.visible.load(Ordering::Relaxed);
     let multi = cfg.multi_letter;
     let view = view_indices(&ov, multi);
-    let page_count = view.len().div_ceil(PROG_PAGE_SIZE).max(1);
+    let ps = effective_page_size(ov, cfg.prog_page_size);
+    let page_count = view.len().div_ceil(ps).max(1);
     let page = ov.prog_page.min(page_count - 1);
-    let start = page * PROG_PAGE_SIZE;
-    let end = (start + PROG_PAGE_SIZE).min(view.len());
+    let start = page * ps;
+    let end = (start + ps).min(view.len());
     let mut render = Render {
         visible,
         phase: "programs".into(),
@@ -602,6 +631,7 @@ fn emit(app: &AppHandle, inner: &Inner, ov: &OverlayState) {
         multi_letter: multi,
         theme: cfg.theme.clone(),
         win_digit_mode: cfg.win_digit_mode.as_str().into(),
+        prog_page_size: ps,
         filter: if multi { ov.letter_buf.clone() } else { String::new() },
         programs: Vec::new(),
         windows: Vec::new(),
@@ -766,6 +796,7 @@ fn open(app: &AppHandle) {
     ov.wins.clear();
     ov.digit_buf.clear();
     ov.switched = false;
+    ov.eff_page_size = 0; // 重新呼出：清掉运行时生效页长，按当前配置偏好重新协商
     ov.last_activated = 0;
     ov.pending = 0;
     let fg = windows::foreground();
@@ -1124,6 +1155,7 @@ fn rebuild_and_emit(app: &AppHandle, inner: &Inner) {
     ov.prog_sel = 0;
     ov.prog_page = 0;
     ov.letter_buf.clear();
+    ov.eff_page_size = 0; // 保存设置/屏蔽等重建：让新的配置偏好重新参与屏幕钳制协商
     emit(app, inner, &ov);
 }
 
@@ -1195,7 +1227,8 @@ fn pick_program(app: AppHandle, process: String) {
         ov.select_indexed(target, &cfg, &mut mru, now)
     } else {
         ov.prog_sel = target;
-        ov.sync_page(cfg.multi_letter);
+        let ps = effective_page_size(&ov, cfg.prog_page_size);
+        ov.sync_page(cfg.multi_letter, ps);
         Effect::Emit
     };
     apply_effect(&app, &*inner, ov, eff);
@@ -1323,7 +1356,8 @@ pub fn run() {
             block_program,
             unblock_program,
             refresh_overlay,
-            pick_program
+            pick_program,
+            set_page_size
         ])
         .setup(move |app| {
             let visible = Arc::new(AtomicBool::new(false));
@@ -1533,12 +1567,55 @@ mod state_machine_tests {
     }
 
     #[test]
-    fn pagination_uses_page_size() {
-        // 超过一页时页数 = ceil(n / PROG_PAGE_SIZE)
-        let n = PROG_PAGE_SIZE * 2 + 3;
-        let page_count = n.div_ceil(PROG_PAGE_SIZE);
-        assert_eq!(page_count, 3);
-        assert_eq!(PROG_PAGE_SIZE, 20);
+    fn pagination_follows_configured_page_size() {
+        // 每页卡片数由 cfg.prog_page_size 决定（不再是固定常量）；50 项分别用上下限翻页
+        fn page_state(n: usize) -> (OverlayState, Config) {
+            let entries = (0..50)
+                .map(|i| entry("", "", &format!("P{}", i), &format!("p{}.exe", i)))
+                .collect();
+            let mut cfg = cfg_with(vec![]);
+            cfg.prog_page_size = n;
+            let mut ov = state_with(entries);
+            ov.phase = Phase::Programs;
+            (ov, cfg)
+        }
+        // N=8：PageDown 后选中落到第 8 项（下一页首项）、page=1
+        let (mut ov, cfg) = page_state(8);
+        let mut mru = HashMap::new();
+        assert_eq!(ov.transition(&HookMsg::PageDown, &cfg, &mut mru, 1, 0, VIS), Effect::Emit);
+        assert_eq!(ov.prog_sel, 8);
+        assert_eq!(ov.prog_page, 1);
+        // N=24：落到第 24 项
+        let (mut ov2, cfg2) = page_state(24);
+        let _ = ov2.transition(&HookMsg::PageDown, &cfg2, &mut mru, 1, 0, VIS);
+        assert_eq!(ov2.prog_sel, 24);
+        assert_eq!(ov2.prog_page, 1);
+        // 页数同源 div_ceil
+        assert_eq!(50usize.div_ceil(8), 7);
+        assert_eq!(50usize.div_ceil(24), 3);
+    }
+
+    #[test]
+    fn runtime_eff_page_size_overrides_config_for_pagination() {
+        // 前端按屏幕下发 eff_page_size 后，分页用生效值而非配置偏好；未下发（0）回退配置
+        let entries = (0..50)
+            .map(|i| entry("", "", &format!("P{}", i), &format!("p{}.exe", i)))
+            .collect();
+        let mut cfg = cfg_with(vec![]);
+        cfg.prog_page_size = 8; // 用户偏好 8
+        let mut ov = state_with(entries);
+        ov.phase = Phase::Programs;
+        ov.eff_page_size = 22; // 屏幕反推的生效值
+        let mut mru = HashMap::new();
+        assert_eq!(ov.transition(&HookMsg::PageDown, &cfg, &mut mru, 1, 0, VIS), Effect::Emit);
+        assert_eq!(ov.prog_sel, 22);
+        // 未下发时回退 cfg
+        let mut ov2 = state_with((0..50)
+            .map(|i| entry("", "", &format!("P{}", i), &format!("p{}.exe", i)))
+            .collect());
+        ov2.phase = Phase::Programs;
+        let _ = ov2.transition(&HookMsg::PageDown, &cfg, &mut mru, 1, 0, VIS);
+        assert_eq!(ov2.prog_sel, 8);
     }
 
     #[test]

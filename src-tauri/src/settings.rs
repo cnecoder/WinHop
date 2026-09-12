@@ -9,7 +9,9 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 
 use crate::windows;
 use crate::{
-    config::{self, WinDigitMode, WindowOrder},
+    config::{
+        self, WinDigitMode, WindowOrder, PROG_PAGE_SIZE_MAX, PROG_PAGE_SIZE_MIN,
+    },
     Inner,
 };
 
@@ -46,6 +48,8 @@ pub(crate) struct SettingsInfo {
     multi_letter: bool,
     theme: String,
     win_digit_mode: String,
+    /// 程序层每页卡片数（驱动卡片自适应缩放）
+    prog_page_size: usize,
     /// 当前生效语言（cfg.lang 为空则取系统检测值）
     lang: String,
     /// 配置里保存的语言（空=跟随系统；用于区分"明确选了 zh-CN"与"跟随系统恰好是中文"）
@@ -90,6 +94,7 @@ pub(crate) fn get_settings(app: AppHandle) -> SettingsInfo {
         multi_letter: cfg.multi_letter,
         theme: cfg.theme.clone(),
         win_digit_mode: cfg.win_digit_mode.as_str().into(),
+        prog_page_size: cfg.prog_page_size,
         // 当前生效语言：配置指定优先，空则跟随系统
         lang: if cfg.lang.is_empty() {
             windows::system_lang().to_string()
@@ -127,6 +132,9 @@ pub(crate) struct SettingsInput {
     pub(crate) multi_letter: bool,
     pub(crate) theme: String,
     pub(crate) win_digit_mode: String,
+    /// 程序层每页卡片数（范围 MIN..=MAX）
+    #[serde(default)]
+    pub(crate) prog_page_size: usize,
     /// 界面语言（"zh-CN"/"en"；空串=跟随系统，由前端传 system 表达）
     #[serde(default)]
     pub(crate) lang: String,
@@ -150,6 +158,17 @@ pub(crate) fn save_settings(app: AppHandle, input: SettingsInput) -> Result<(), 
     if win_digit_mode.as_str() != input.win_digit_mode {
         return Err(format!("无效的数字键行为「{}」", input.win_digit_mode));
     }
+    // 每页卡片数：0（前端缺省/旧版）按默认 20，其余必须在 [MIN, MAX]
+    let prog_page_size = if input.prog_page_size == 0 {
+        20
+    } else if !(PROG_PAGE_SIZE_MIN..=PROG_PAGE_SIZE_MAX).contains(&input.prog_page_size) {
+        return Err(format!(
+            "每页卡片数须在 {}..={} 之间",
+            PROG_PAGE_SIZE_MIN, PROG_PAGE_SIZE_MAX
+        ));
+    } else {
+        input.prog_page_size
+    };
     // lang：空=跟随系统（前端传 "system" 时归一为空），zh-CN/en 直接存
     let lang: String = if input.lang == "system" {
         String::new()
@@ -212,6 +231,7 @@ pub(crate) fn save_settings(app: AppHandle, input: SettingsInput) -> Result<(), 
         cfg.autostart = input.autostart;
         cfg.theme = input.theme.clone();
         cfg.win_digit_mode = win_digit_mode;
+        cfg.prog_page_size = prog_page_size;
         cfg.lang = lang;
         if new_sc.is_some() {
             cfg.hotkey = new_hotkey.to_string();

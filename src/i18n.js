@@ -38,6 +38,10 @@ export const I18N = {
     setOrder: "窗口排序方式",
     orderZ: "固定序号（按创建顺序，不受使用影响）",
     orderMru: "最近使用优先（上次用的排 1）",
+    setPageSize: "每页卡片数",
+    pageSizeHint:
+      "偏好数量；步进范围随当前屏幕自动限定（卡片等比缩放、铺满屏幕且不过大/过小）",
+    pageSizeReset: "重置（本屏推荐）",
     setMode: "模式",
     modeSingle: "单字母模式：每个程序一个字母键，一按直达",
     modeMulti:
@@ -72,7 +76,7 @@ export const I18N = {
     helpKeys: "其它按键",
     helpSpace: "在最近使用的两个窗口间快速互切。",
     helpArrows: "上下移动选择条（程序层 / 窗口层均可）。",
-    helpPager: "程序超过 20 个时翻页。",
+    helpPager: "程序一页放不下时翻页（每页卡片数可在设置中调整）。",
     helpF2: "打开设置页（也可点右上角「设置」）。",
     helpF11: "覆盖层全屏 / 窗口模式切换。",
     helpEdit: "绑定代号 / 改名 / 屏蔽",
@@ -118,6 +122,10 @@ export const I18N = {
     setOrder: "Window order",
     orderZ: "Fixed (creation order, unaffected by use)",
     orderMru: "Most recently used first (last used is #1)",
+    setPageSize: "Cards per page",
+    pageSizeHint:
+      "Preferred count; the stepper range is auto-limited to this screen (cards scale to fill the screen, never too large/small)",
+    pageSizeReset: "Reset (best for this screen)",
     setMode: "Mode",
     modeSingle: "Single-letter mode: one letter per program, press to jump",
     modeMulti:
@@ -152,7 +160,7 @@ export const I18N = {
     helpKeys: "Other keys",
     helpSpace: "Quick-switch between your two most recently used windows.",
     helpArrows: "Move the selection bar (both program and window layers).",
-    helpPager: "Page through programs when there are more than 20.",
+    helpPager: "Page through programs when one page isn't enough (cards per page is adjustable in Settings).",
     helpF2: "Open Settings (or click “Settings” at the top right).",
     helpF11: "Toggle the overlay between fullscreen and windowed.",
     helpEdit: "Bind a code / rename / block",

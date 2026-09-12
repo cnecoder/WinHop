@@ -48,7 +48,7 @@ WebView JS keydown ─invoke("key")─┘        (lib.rs)                       
 
 ### 窗口选择：数字
 
-- 程序层每页 **20** 个，`PageUp/PageDown` 翻页。
+- 程序层每页 **N 个**（偏好配置 `prog_page_size`，范围 8–64，默认 20；`PageUp/PageDown` 翻页）。N 是用户偏好，**生效值由前端按屏幕高度反推钳制**（见 §5「覆盖层缩放」），保证卡片铺满屏幕且不过大/过小。
 - 窗口层每个窗口有数字编号，支持多位：
   - **单字母模式**：数字累积，`n*10 > 总数`（再加一位必超）时立即跳转。
   - **多字母模式 + 窗口 ≤9**：每个数字独立，按到即定。
@@ -121,6 +121,18 @@ MRU 在经 WinHop 切换、呼出时记录前台、以及看门狗线程检测�
 
 窗口层行缩略图与右侧大预览都用 **DWM 缩略图**（`DwmRegisterThumbnail` / `DwmUpdateThumbnailProperties`，Win+Tab 同款）：DWM 直接把目标窗口纹理实时合成到覆盖层区域，零拷贝、抗遮挡、抗最小化（最小化用 `rcNormalPosition` 还原尺寸 + CLIENTONLY 路径）。按 `slot`（`"pane"` 大预览 / `"row:<hwnd>"` 行）注册，换源先注销；回程序层/关闭时 `thumb_clear` 全部注销。
 
+### 覆盖层缩放（前端自适应）
+
+- 目标：任何分辨率/缩放下，程序层卡片**铺满行区**且不过大/过小；纯自动无手动档位。
+- 设置项 `prog_page_size`（步进器 8–64，默认 20）只是**偏好**；真正生效的 N 由屏幕反推：
+  - 行区可用高度 avail = `#list.clientHeight` − 工具条高（窗口层复用程序层缓存值，两层同 scale 不跳动）− `#list` padding-top 10px。
+  - 可行区间 `pageSizeBounds(avail)`：`n_min=ceil(avail/(44·1.35))`、`n_max=floor(avail/(44·0.75))`（44 = 行高 40 + 一个 gap 4；flex 列工具条带前导 gap，n 行恰有 n 个 gap）。1080p≈[16,27]，1440p≈[22,38]，720p≈[10,16]。
+  - `clampPageSize(偏好, avail)` 把偏好钳进屏幕可行区间（再交绝对 sanity 区间 8–64）；区间内任意 N 都使 `cardScale(avail,n)=avail/(44n)` 落在 0.75–1.35 且总高恰好铺满。
+  - **设置页步进器上下限就是该屏幕区间**（`pageSizeSettingBounds`，−/+ 到边界置灰；设置页打开时覆盖层隐藏测不到 DOM，avail 按 `innerHeight-124-工具条(实测缓存/兜底42)-10` 推算）；打开时已存偏好超界即钳到边界并同步快照。「重置」按钮 = `optimalPageSize` = `round(avail/44)` 再钳区间，即 scale≈1 的本屏推荐行数。
+- 每次 `render` 后前端 `applyUiScale()`：钳出生效 N，写 `--ui-scale`；**生效 N 与后端下发值不同则 invoke `set_page_size(n)`**——后端存入 `OverlayState.eff_page_size`（仅运行时、不持久化，呼出时为 0 回退配置），分页/sync_page/emit 全部改用 `effective_page_size`，并立即重发一帧渲染，前端第二次 render 即收敛，不产生循环。尺寸令牌在 `#overlay-view` 上全部 `calc(基准 * var(--ui-scale))`；设置页/帮助页在其外不受影响。
+- 写变量后下一帧（rAF）再测 `getBoundingClientRect() × devicePixelRatio` 并 `thumb_set`，故 DWM 缩略图坐标始终跟随缩放，无需改公式。
+- 重算触发：每次 render、`window resize`（rAF 合并）、`ResizeObserver(#list)`、DPR 变化（`matchMedia((resolution:Ndppx))` 一次性监听重建，覆盖主屏缩放调整）；语言切换经 render 也顺带修复了缩略图陈旧。
+
 ## 6. 配置
 
 ### 位置与迁移
@@ -139,6 +151,7 @@ MRU 在经 WinHop 切换、呼出时记录前台、以及看门狗线程检测�
   "multi_letter": false,
   "theme": "black-green",
   "win_digit_mode": "jump",
+  "prog_page_size": 20,
   "lang": "",
   "programs": [
     { "key": "c", "multi_key": "ch", "name": "Chrome", "process": "chrome.exe" }
@@ -157,6 +170,7 @@ MRU 在经 WinHop 切换、呼出时记录前台、以及看门狗线程检测�
 | `multi_letter` | 多字母模式开关 |
 | `theme` | 主题 id：`black-green`（默认）/ `black-yellow`；配色全走 CSS 变量，`<html data-theme>` 切换 |
 | `win_digit_mode` | 窗口层数字行为：`jump` 直切 / `preview` 先预览 |
+| `prog_page_size` | 每页卡片数**偏好**，8–64，默认 20；实际生效值由前端按屏幕钳制后经 `set_page_size` 下发（仅运行时，不持久化），Rust 分页与前端缩放共用生效值 |
 | `lang` | 界面语言：空=跟随系统，`zh-CN` / `en` |
 | `programs[]` | `key` 单字母代号（单小写字母，可空）、`multi_key` 多字母代号（全小写，可空）、`name` 显示名、`process` 小写 exe 名；`key`/`multi_key` 各自唯一 |
 | `blocked[]` | 黑名单，兼容裸字符串或 `{process,note}`；进程名小写 |
@@ -164,7 +178,7 @@ MRU 在经 WinHop 切换、呼出时记录前台、以及看门狗线程检测�
 
 ### 校验与保存
 
-- 加载时归一化（进程名/代号小写）、去重黑名单；`window_order`/`theme`/`win_digit_mode`/`lang` 非法值回退默认；`key` 非单小写字母或重复、`multi_key` 非法或重复 → **panic**（配置错误启动即暴露，不静默）。
+- 加载时归一化（进程名/代号小写）、去重黑名单；`window_order`/`theme`/`win_digit_mode`/`lang` 非法值回退默认；`prog_page_size` 越界（非 8–64）记 eprintln 并钳制到边界，不 panic（该值只是偏好，屏幕可行性运行时再钳）；`key` 非单小写字母或重复、`multi_key` 非法或重复 → **panic**（配置错误启动即暴露，不静默）。
 - **原子保存**：写 `config.json.tmp` 再 `rename`，防写坏导致下次起不来。
 - UI 内修改（✎ 编辑/删除、屏蔽、设置页保存）即时落盘并 `rebuild_and_emit`/`refresh_overlay` 刷新覆盖层；直接改文件需重启。
 

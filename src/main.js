@@ -6,6 +6,10 @@ import {
   rectPhys,
   clipRectPhys,
   winHintKind,
+  cardScale,
+  clampPageSize,
+  pageSizeSettingBounds,
+  optimalPageSize,
 } from "./util.js";
 
 const { listen } = window.__TAURI__.event;
@@ -13,6 +17,10 @@ const { invoke } = window.__TAURI__.core;
 
 // 与后端 windows::PWA_PROC_PREFIX 一致：Chromium PWA 的虚拟进程键前缀
 const PWA_PROC_PREFIX = "pwa#";
+
+// 每页卡片数默认偏好（绝对 sanity 区间 8–64 在 Rust 与 util pageSizeSettingBounds 中）。
+// 注意：设置值是用户偏好，设置页步进范围与实际生效值都按屏幕可行区间钳制
+const PROG_PAGE_SIZE_DEFAULT = 20;
 
 const appEl = document.getElementById("app");
 const titleEl = document.getElementById("title");
@@ -63,6 +71,9 @@ function readSettingsForm() {
     multi_letter: (mode ? mode.value : "single") === "multi",
     theme: theme ? theme.value : "black-green",
     win_digit_mode: wdm ? wdm.value : "jump",
+    prog_page_size:
+      Number(document.getElementById("pagesize-value").textContent) ||
+      PROG_PAGE_SIZE_DEFAULT,
     lang: langChoice, // system 或具体语言
     blocked: (blockedState || []).map((b) => b.process),
   };
@@ -95,6 +106,7 @@ async function openSettings() {
     multi_letter: info.multi_letter,
     theme: info.theme,
     win_digit_mode: info.win_digit_mode || "jump",
+    prog_page_size: info.prog_page_size || PROG_PAGE_SIZE_DEFAULT,
     // 保存的语言选择：跟随系统=system，否则具体语言
     lang: info.lang_cfg || "system",
     blocked: (info.blocked || []).map((b) => b.process).sort(),
@@ -115,6 +127,15 @@ async function openSettings() {
   document.querySelectorAll('input[name="win-digit-mode"]').forEach((r) => {
     r.checked = r.value === (info.win_digit_mode || "jump");
   });
+  // 每页卡片数步进器：上下限为当前屏幕反推的可行区间，点改只暂存，保存后生效。
+  // 已存偏好若超出本屏区间（如在大屏设的小值换到小屏），打开即钳到边界并同步快照
+  const n = clampPageSize(
+    info.prog_page_size || PROG_PAGE_SIZE_DEFAULT,
+    rowsAvailHeight()
+  );
+  document.getElementById("pagesize-value").textContent = String(n);
+  settingsLoaded.prog_page_size = n;
+  updatePageSizeUi();
   // 语言单选项：system（跟随系统）/ zh-CN / en。点选只暂存，保存后生效。
   // "跟随系统"标签显示系统实际检测语言（lang_sys，与用户设置无关）
   sysLang = info.lang_sys || "zh-CN";
@@ -244,6 +265,49 @@ function renderBlockedUi() {
   }
   updateSettingsState();
 }
+
+// 设置页步进器上下限 = 当前屏幕反推的可行区间（卡片缩放保证在 0.75–1.35 内且铺满）
+function settingPageSizeBounds() {
+  return pageSizeSettingBounds(rowsAvailHeight());
+}
+
+// 每页卡片数步进器：刷新数值显示与上下限禁用态
+function updatePageSizeUi() {
+  const n =
+    Number(document.getElementById("pagesize-value").textContent) ||
+    PROG_PAGE_SIZE_DEFAULT;
+  const b = settingPageSizeBounds();
+  document.getElementById("pagesize-dec").disabled = n <= b.min;
+  document.getElementById("pagesize-inc").disabled = n >= b.max;
+}
+
+document.getElementById("pagesize-dec").addEventListener("click", () => {
+  const el = document.getElementById("pagesize-value");
+  const b = settingPageSizeBounds();
+  const n = Number(el.textContent) || PROG_PAGE_SIZE_DEFAULT;
+  if (n > b.min) {
+    el.textContent = String(n - 1);
+    updatePageSizeUi();
+    updateSettingsState();
+  }
+});
+document.getElementById("pagesize-inc").addEventListener("click", () => {
+  const el = document.getElementById("pagesize-value");
+  const b = settingPageSizeBounds();
+  const n = Number(el.textContent) || PROG_PAGE_SIZE_DEFAULT;
+  if (n < b.max) {
+    el.textContent = String(n + 1);
+    updatePageSizeUi();
+    updateSettingsState();
+  }
+});
+// 重置：一键回到当前屏幕的推荐卡片数（基准卡片大小 scale≈1，铺满行区）
+document.getElementById("pagesize-reset").addEventListener("click", () => {
+  const el = document.getElementById("pagesize-value");
+  el.textContent = String(optimalPageSize(rowsAvailHeight()));
+  updatePageSizeUi();
+  updateSettingsState();
+});
 
 // 多字母专属选项：仅选中多字母模式时显示
 function syncMultiOpts() {
@@ -682,9 +746,56 @@ function startEditProgram(btn) {
 let hoverIdx = null;
 let lastWinKey = null;
 
-// ===== DWM 缩略图布局：行缩略图与大预览都由后端 DWM 合成（Win+Tab 同款，零拷贝实时） =====
+// ===== 覆盖层卡片自适应缩放 + DWM 缩略图布局（行缩略图与大预览均由后端 DWM 合成） =====
 function dpr() {
   return window.devicePixelRatio || 1;
+}
+
+// 程序层工具条高度缓存：窗口层无工具条，但两层共用同一 --ui-scale，
+// 行区可用高度统一按「#list 高 - 工具条高」计算，避免进出窗口层缩放跳动
+let toolbarH = 0;
+
+// 行区固定开销：#list 的 padding-top 10px（内容盒之外的唯一固定项；
+// 工具条与首行、各行之间的 n 个 gap 已包含在 cardScale 的 44n 槽位内）
+const ROWS_FIXED_OVERHEAD = 10;
+
+// 行区可用高度：#list 高固定为 calc(100vh - 124px)，内容区再减 padding-top 10 与工具条。
+// 设置页打开时覆盖层被隐藏（测不到 DOM），故一律按视口推算而非读 clientHeight；
+// 工具条高沿用最近一次覆盖层渲染的实测缓存（窗口层/设置页都复用，保证同屏同区间）
+function rowsAvailHeight() {
+  const toolbar = listEl.querySelector(".toolbar");
+  if (toolbar) toolbarH = toolbar.offsetHeight;
+  if (!toolbarH) toolbarH = 42; // 首次尚未渲染过覆盖层时的兜底
+  return window.innerHeight - 124 - toolbarH - ROWS_FIXED_OVERHEAD;
+}
+
+// 计算 --ui-scale 并写入 #overlay-view（仅覆盖层两层消费）。
+// 关键：用户设置的页长只是偏好，先按当前屏幕可行区间（clampPageSize）钳出生效页长，
+// 生效页长不同则下发 set_page_size 让后端分页对齐（触发一次重发渲染后即收敛），
+// 因此 scale 永不触顶/封底，N 行总高恰好铺满行区——不会出现卡片放到最大仍空半屏。
+function applyUiScale() {
+  if (!state || !state.visible || settingsOpen || helpOpen) return;
+  const preferred = state.prog_page_size || PROG_PAGE_SIZE_DEFAULT;
+  const avail = rowsAvailHeight();
+  const n = clampPageSize(preferred, avail);
+  overlayView.style.setProperty("--ui-scale", String(cardScale(avail, n)));
+  if (n !== preferred) {
+    state.prog_page_size = n; // 先本地收敛，避免重发渲染前的重复 invoke
+    invoke("set_page_size", { n }).catch(() => {});
+  }
+}
+
+// render 后统一重排：先写缩放变量，下一帧（新尺寸生效后）再测量缩略图/滚动选中行进区
+let layoutRaf = 0;
+function scheduleOverlayLayout() {
+  applyUiScale();
+  if (layoutRaf) return;
+  layoutRaf = requestAnimationFrame(() => {
+    layoutRaf = 0;
+    scrollActiveIntoView();
+    layoutThumbs();
+    updatePreview();
+  });
 }
 
 // 元素物理 rect + 与滚动容器的可视裁剪 rect（ax/ay/aw/ah 为 0 表示不裁剪）
@@ -801,8 +912,7 @@ function render(s) {
         row.classList.toggle("active", !!(s.windows[i] && s.windows[i].active));
       });
       titleEl.textContent = winHint(s);
-      scrollActiveIntoView();
-      updatePreview();
+      scheduleOverlayLayout();
     } else {
       lastWinKey = winKey;
       listEl.className = "window-layer";
@@ -823,8 +933,7 @@ function render(s) {
           .join("") +
         `</div>` +
         `<div class="wpreview"><img id="preview-img" alt="" /></div>`;
-      layoutThumbs();
-      updatePreview();
+      scheduleOverlayLayout();
     }
   } else {
     lastWinKey = null;
@@ -879,6 +988,7 @@ function render(s) {
           }
         )
         .join("");
+    scheduleOverlayLayout();
   }
 }
 
@@ -897,3 +1007,29 @@ listen("overlay", (e) => render(e.payload));
 
 // 行缩略图随滚动重排（capture 捕获 .wlist 自身滚动，列表重建后无需重绑）
 listEl.addEventListener("scroll", () => requestAnimationFrame(layoutThumbs), true);
+
+// 视口变化（分辨率切换 / F11 窗口模式 / 主屏 DPI 调整）后重算缩放与缩略图，rAF 合并
+let relayoutRaf = 0;
+function requestOverlayRelayout() {
+  if (relayoutRaf) return;
+  relayoutRaf = requestAnimationFrame(() => {
+    relayoutRaf = 0;
+    scheduleOverlayLayout();
+  });
+}
+window.addEventListener("resize", requestOverlayRelayout);
+new ResizeObserver(requestOverlayRelayout).observe(listEl);
+
+// DPR 变化监听：matchMedia 当前 dppx 的一次性查询，触发后按新 dpr 重建
+function watchDpr() {
+  const mq = window.matchMedia(`(resolution: ${dpr()}dppx)`);
+  mq.addEventListener(
+    "change",
+    () => {
+      watchDpr();
+      requestOverlayRelayout();
+    },
+    { once: true }
+  );
+}
+watchDpr();

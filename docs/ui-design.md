@@ -40,6 +40,20 @@
 
 **新增主题 = 加一个 `[data-theme="xxx"]` 块**（仅覆盖上述 4 个 accent 变量），并在 Rust 侧 `config::THEMES` 登记 id、前端 `i18n.js` 加 `themeXxx` 中英文名 + `main.js` 的 `themeName` id→key 映射。Rust 只下发主题 id，显示名完全由前端 i18n 负责（不在 Rust 硬编码中文名）。中性底色/文字不要随主题变。
 
+### 缩放令牌（仅 `#overlay-view`，与主题无关）
+
+| 变量 | 基准值 | 用途 |
+|---|---|---|
+| `--ui-scale` | `1`（JS 写入） | 总缩放因子，钳制 0.75–1.35 |
+| `--card-h` / `--card-gap` | 40px / 4px | 程序卡片行高、列间距 |
+| `--row-fs` / `--row-px` | 16px / 6px 12px | 程序行字号、行内边距 |
+| `--key-slot-w` / `--key-min-w` / `--key-fs` | 52px / 26px / 16px | 代号槽宽、徽章最小宽、徽章字号 |
+| `--wlist-w` / `--wrow-fs` / `--wpreview-pad` | 420px / 15px / 14px | 窗口层左列宽、窗口行字号、大预览内边距 |
+
+- 派生值一律 `calc(<基准> * var(--ui-scale))`；新增覆盖层尺寸先加令牌再引用，**不要在 `#overlay-view` 内新写死 px**。
+- header、`#app` padding、设置页、帮助页不消费这些令牌，保持固定尺寸。
+- 计算与重算触发见 `docs/design.md` 前端架构「覆盖层缩放」。
+
 ---
 
 ## 2. 颜色使用规则
@@ -106,11 +120,12 @@ transition: background var(--dur) var(--ease);
 
 ### 3.5 列表行 / 卡片
 
-- 程序行 `.row`：flex、`align-items:center`、圆角 `--r-row`、字号 16px、行高固定 40px、行间距 4px。
-- 程序层列表占满视口剩余高度 `calc(100vh - 124px)`；**每页最多 20 个（`PROG_PAGE_SIZE`），卡片固定高、从上到下排列**；不足 20 个时顶部对齐，不居中、不拉伸均分。
+- 程序行 `.row`：flex、`align-items:center`、圆角 `--r-row`；字号基准 16px（`--row-fs`）、行高基准 40px（`--card-h`）、行间距基准 4px（`--card-gap`），均 × `--ui-scale`。
+- 程序层列表占满视口剩余高度 `calc(100vh - 124px)`；**每页 N 个卡片从上到下排列铺满行区**；实际程序不足 N 个时顶部对齐，不居中、不拉伸均分。
+- **自适应缩放（关键语义）**：设置项 `prog_page_size`（步进器偏好 8–64，默认 20）不直接决定行数，前端按屏幕高度反推可行区间 `pageSizeBounds`（`n_min=ceil(avail/(44·1.35))`、`n_max=floor(avail/(44·0.75))`，行区 avail = `#list` 高 − 工具条高 − padding-top；基准槽位 44 = 行 40 + gap 4），把偏好钳进区间得生效 N（`clampPageSize`），再 `cardScale=avail/(44n)`——故 scale 永不触顶/封底、卡片总高恰好铺满行区，不会「放到最大仍空半屏」。生效 N 经 `set_page_size` 下发 Rust 对齐分页（仅运行时）。设置页步进器 −/+ 的禁用边界就是该屏幕可行区间（不是固定 8–64，后者只是 sanity 绝对区间）；「重置」按钮回到 scale≈1 的本屏推荐行数。缩放只作用于 `#overlay-view`（程序层/窗口层），设置页、帮助页固定尺寸不受影响。
 - 选中/悬停高亮**只套软件名卡片 `.name`**（不框整行、不框代号）：选中 = accent tint + inset 描边；悬停 = 白透明 `rgba(line,0.07)`。
 - 未运行行 `.row.off`：代号/名称/屏数全部降为 `--off` 灰。
-- 窗口层：左侧 `.wlist`（420px 宽、surface 底、accent 描边面板）+ 右侧 `.wpreview` 大预览；窗口行 `.wrow` 选中同 accent tint 规则。
+- 窗口层：左侧 `.wlist`（基准 420px 宽 `--wlist-w`、surface 底、accent 描边面板）+ 右侧 `.wpreview` 大预览（padding `--wpreview-pad`）；窗口行 `.wrow` 字号 `--wrow-fs`，选中同 accent tint 规则。两层共用同一 `--ui-scale`，进出窗口层不跳动。
 
 ### 3.6 分组与文字层级
 
@@ -129,6 +144,7 @@ transition: background var(--dur) var(--ease);
 ## 4. 布局约定
 
 - 覆盖层全屏 `100vw/100vh`，`#app` 内边距 `24px 36px`；内容列 `max-width:1200px` 居中（窗口层突破到全宽）。
+- 卡片尺寸不写死：行区实测高度先反推出本屏可行卡片数区间（缩放 0.75–1.35 内），用户偏好钳进区间后再算 `--ui-scale`——卡片始终铺满行区，不会只占半屏。
 - 设置页 `max-width:720px` 居中，分区 `.setting-section` 间距 22px。
 - 头部两端对齐：左标题+模式徽章，右图例+设置按钮+提示；底部 1px 白透明分隔线。
 
