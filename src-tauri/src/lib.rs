@@ -687,20 +687,25 @@ fn build_prog_list(
     autos.sort();
     for proc in autos {
         let path = wins_by_proc.get(proc).and_then(|wins| wins.first()).map(|w| w.path.clone());
-        // 取 exe 文件名去 .exe 作为回退名；路径缺失/为空时回退到进程名
-        let stem = path
-            .as_deref()
-            .filter(|p| !p.is_empty())
-            .and_then(|p| p.rsplit('\\').next())
-            .map(|s| s.trim_end_matches(".exe"))
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| proc.trim_end_matches(".exe"))
-            .to_string();
-        let name = path
-            .as_deref()
-            .filter(|p| !p.is_empty())
-            .and_then(windows::file_description)
-            .unwrap_or(stem);
+        // PWA 虚拟进程（pwa#<app-id>，与浏览器同 exe）：名取浏览器 Web Applications 快捷方式名，
+        // 缺失时回退 app-id；普通进程走 FileDescription → exe 文件名
+        let name = if let Some(app_id) = proc.strip_prefix(windows::PWA_PROC_PREFIX) {
+            windows::pwa_app_name(app_id).unwrap_or_else(|| format!("PWA {}", app_id))
+        } else {
+            // 取 exe 文件名去 .exe 作为回退名；路径缺失/为空时回退到进程名
+            let stem = path
+                .as_deref()
+                .filter(|p| !p.is_empty())
+                .and_then(|p| p.rsplit('\\').next())
+                .map(|s| s.trim_end_matches(".exe"))
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| proc.trim_end_matches(".exe"))
+                .to_string();
+            path.as_deref()
+                .filter(|p| !p.is_empty())
+                .and_then(windows::file_description)
+                .unwrap_or(stem)
+        };
         list.push(ProgEntry {
             key: String::new(),
             multi_key: String::new(),

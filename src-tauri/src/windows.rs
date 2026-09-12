@@ -1,6 +1,14 @@
+use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::{Arc, OnceLock};
+
+use windows_sys::core::GUID;
+use windows_sys::Win32::System::Com::{
+    CoInitializeEx, COINIT_APARTMENTTHREADED, StructuredStorage::PROPVARIANT,
+};
+use windows_sys::Win32::System::Variant::VT_LPWSTR;
+use windows_sys::Win32::UI::Shell::PropertiesSystem::{PROPERTYKEY, SHGetPropertyStoreForWindow};
 use windows_sys::Win32::Foundation::{
     CloseHandle, BOOL, GENERIC_WRITE, HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM, LRESULT, POINT,
     RECT, WPARAM, ERROR_ALREADY_EXISTS, ERROR_FILE_NOT_FOUND, GetLastError,
@@ -51,6 +59,293 @@ pub struct WinInfo {
     pub process: String,
     pub path: String,
     pub monitor: u32,
+}
+
+// PWA 虚拟进程名前缀。Chromium PWA（网站安装成应用）窗口与普通浏览窗口同属
+// chrome.exe/msedge.exe，但承载 PWA 窗口的进程命令行带 "--app-id=<32 位 id>"，
+// 普通窗口进程没有。用 "pwa#<app-id>" 作为独立分组键。
+pub const PWA_PROC_PREFIX: &str = "pwa#";
+
+// PROCESS_BASIC_INFORMATION（仅取 PebBaseAddress，x64 偏移 8）
+#[repr(C)]
+struct ProcessBasicInformation {
+    reserved1: *mut c_void,
+    peb_base_address: *mut c_void,
+    reserved2: [*mut c_void; 2],
+    unique_process_id: *mut c_void,
+    reserved3: *mut c_void,
+}
+
+// RTL_UNICODE_STRING：Length/MaximumLength 为字节数，x64 下 Buffer 偏移 8
+#[repr(C)]
+struct UnicodeString {
+    length: u16,
+    maximum_length: u16,
+    buffer: *const u16,
+}
+
+#[link(name = "ntdll")]
+extern "system" {
+    fn NtQueryInformationProcess(
+        process: HANDLE,
+        info_class: u32,
+        info: *mut c_void,
+        info_length: u32,
+        return_length: *mut u32,
+    ) -> i32;
+}
+
+// PKEY_AppUserModel_ID = {9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3}, pid 5
+const PKEY_APPUSERMODEL_ID: PROPERTYKEY = PROPERTYKEY {
+    fmtid: GUID {
+        data1: 0x9f4c2855,
+        data2: 0x9f79,
+        data3: 0x4b39,
+        data4: [0xa8, 0xd0, 0xe1, 0xd4, 0x2d, 0xe1, 0xd5, 0xf3],
+    },
+    pid: 5,
+};
+
+// IPropertyStore 的 COM vtable（windows-sys 是 raw 绑定，方法需自行经 vtable 调用）
+#[repr(C)]
+struct PropertyStoreVtbl {
+    query_interface: unsafe extern "system" fn(*mut c_void, *const GUID, *mut *mut c_void) -> i32,
+    add_ref: unsafe extern "system" fn(*mut c_void) -> u32,
+    release: unsafe extern "system" fn(*mut c_void) -> u32,
+    get_count: unsafe extern "system" fn(*mut c_void, *mut u32) -> i32,
+    get_at: unsafe extern "system" fn(*mut c_void, u32, *mut PROPERTYKEY) -> i32,
+    get_value:
+        unsafe extern "system" fn(*mut c_void, *const PROPERTYKEY, *mut PROPVARIANT) -> i32,
+    set_value:
+        unsafe extern "system" fn(*mut c_void, *const PROPERTYKEY, *const PROPVARIANT) -> i32,
+    commit: unsafe extern "system" fn(*mut c_void) -> i32,
+}
+
+#[repr(C)]
+struct PropertyStore {
+    vtbl: *const PropertyStoreVtbl,
+}
+
+// 读窗口显式 AppUserModelID（PKEY_AppUserModel_ID）。失败/为空返回 None。
+// 必须在 STA 线程调用（见 enum_windows 的 CoInitializeEx），否则跨进程读回空。
+// 注意：跨进程读 Chromium 窗口时该串可能被系统截断（实测稳定缺固定若干字符），
+// 故不能直接当 app-id；本处只用其中的 "._crx_" 标记做「是否 PWA 窗口」的布尔判定，
+// 完整 32 位 id 改由进程命令行 --app-id 取得（见 process_command_line）。
+fn window_aumid(hwnd: HWND) -> Option<String> {
+    unsafe {
+        let iid = GUID {
+            data1: 0x886d8eeb,
+            data2: 0x8cf2,
+            data3: 0x4446,
+            data4: [0x8d, 0x02, 0xcd, 0xba, 0x1d, 0xbd, 0xcf, 0x99],
+        };
+        let mut store: *mut PropertyStore = std::ptr::null_mut();
+        let hr = SHGetPropertyStoreForWindow(
+            hwnd,
+            &iid,
+            &mut store as *mut _ as *mut *mut c_void,
+        );
+        if hr != 0 || store.is_null() {
+            return None;
+        }
+        let value = {
+            let mut pv: PROPVARIANT = std::mem::zeroed();
+            let gv = ((*store).vtbl.as_ref().unwrap().get_value)(
+                store as *mut c_void,
+                &PKEY_APPUSERMODEL_ID,
+                &mut pv,
+            );
+            if gv == 0 && pv.Anonymous.Anonymous.vt == VT_LPWSTR {
+                let p = pv.Anonymous.Anonymous.Anonymous.pwszVal;
+                if p.is_null() {
+                    None
+                } else {
+                    // 指向目标进程属性存储内部缓冲：不得 CoTaskMemFree/PropVariantClear，
+                    // Release 前直接拷贝即可。
+                    let mut len = 0usize;
+                    while *p.add(len) != 0 {
+                        len += 1;
+                    }
+                    Some(String::from_utf16_lossy(std::slice::from_raw_parts(p, len)))
+                }
+            } else {
+                None
+            }
+        };
+        ((*store).vtbl.as_ref().unwrap().release)(store as *mut c_void);
+        value
+    }
+}
+
+// 从浏览器进程命令行提取 PWA 的 32 位 app-id（"--app-id=<32 位小写>"）。
+// 普通浏览窗口进程命令行无此标记 → None。纯函数便于单测。
+fn pwa_app_id(cmdline: &str) -> Option<&str> {
+    let marker = "--app-id=";
+    let rest = cmdline.split(marker).nth(1)?;
+    let id = rest.split(['"', ' ']).next().unwrap_or("");
+    if id.len() == 32 && id.bytes().all(|b| b.is_ascii_lowercase()) {
+        Some(id)
+    } else {
+        None
+    }
+}
+
+// 读远程进程命令行：NtQueryInformationProcess 取 PEB → ProcessParameters(x64 0x20)
+// → CommandLine UNICODE_STRING(x64 0x70) → ReadProcessMemory。任何失败返回 None
+// （退回普通按 exe 分组）。不走窗口 AUMID：实测跨进程 SHGetPropertyStoreForWindow
+// 对 Chromium 读到的 AUMID 会被截断（缺固定若干字符），不可靠；命令行是进程自身
+// 启动参数，确定且逐进程精确。
+fn process_command_line(pid: u32) -> Option<String> {
+    use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
+    use windows_sys::Win32::System::Threading::PROCESS_VM_READ;
+
+    unsafe fn read_mem(h: HANDLE, addr: usize, buf: *mut c_void, len: usize) -> bool {
+        unsafe {
+            let (mut off, mut remaining) = (0usize, len);
+            while remaining > 0 {
+                let mut got = 0usize;
+                if ReadProcessMemory(
+                    h,
+                    addr.wrapping_add(off) as *const c_void,
+                    (buf as usize).wrapping_add(off) as *mut c_void,
+                    remaining,
+                    &mut got,
+                ) == 0
+                    || got == 0
+                {
+                    return false;
+                }
+                off += got;
+                remaining -= got;
+            }
+            true
+        }
+    }
+
+    unsafe {
+        let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, 0, pid);
+        if h.is_null() {
+            return None;
+        }
+        let result = (|| -> Option<String> {
+            let mut pbi: ProcessBasicInformation = std::mem::zeroed();
+            let status = NtQueryInformationProcess(
+                h,
+                0, // ProcessBasicInformation
+                &mut pbi as *mut _ as *mut c_void,
+                std::mem::size_of::<ProcessBasicInformation>() as u32,
+                std::ptr::null_mut(),
+            );
+            if status != 0 || pbi.peb_base_address.is_null() {
+                return None;
+            }
+            // PEB->ProcessParameters
+            let mut params = 0usize;
+            if !read_mem(
+                h,
+                pbi.peb_base_address as usize + 0x20,
+                &mut params as *mut _ as *mut c_void,
+                std::mem::size_of::<usize>(),
+            ) || params == 0
+            {
+                return None;
+            }
+            // RTL_USER_PROCESS_PARAMETERS->CommandLine
+            let mut cmd = UnicodeString {
+                length: 0,
+                maximum_length: 0,
+                buffer: std::ptr::null(),
+            };
+            if !read_mem(
+                h,
+                params + 0x70,
+                &mut cmd as *mut _ as *mut c_void,
+                std::mem::size_of::<UnicodeString>(),
+            ) || cmd.buffer.is_null() || cmd.length == 0
+            {
+                return None;
+            }
+            let n = (cmd.length as usize) / 2;
+            let mut wide = vec![0u16; n];
+            if !read_mem(
+                h,
+                cmd.buffer as usize,
+                wide.as_mut_ptr() as *mut c_void,
+                cmd.length as usize,
+            ) {
+                return None;
+            }
+            Some(String::from_utf16_lossy(&wide))
+        })();
+        CloseHandle(h);
+        result
+    }
+}
+
+// 浏览器 PWA 名表：app-id → 名称。来源：Chrome/Edge profile 的
+// "User Data\<Profile>\Web Applications\_crx_<app-id>\<名>.lnk"（.lnk 主文件名即 PWA 名）。
+// 首次使用时扫描全部本地 profile 一次。
+fn pwa_names() -> &'static HashMap<String, String> {
+    static NAMES: OnceLock<HashMap<String, String>> = OnceLock::new();
+    NAMES.get_or_init(scan_pwa_names)
+}
+
+fn scan_pwa_names() -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    let Ok(local) = std::env::var("LOCALAPPDATA") else {
+        return map;
+    };
+    // Chrome 与 Edge 的 User Data 根；下一层的每个 profile 目录里找 Web Applications
+    for rel in [
+        "Google\\Chrome\\User Data",
+        "Microsoft\\Edge\\User Data",
+    ] {
+        scan_user_data(&std::path::Path::new(&local).join(rel), &mut map);
+    }
+    map
+}
+
+fn scan_user_data(base: &std::path::Path, map: &mut HashMap<String, String>) {
+    let Ok(profiles) = std::fs::read_dir(base) else {
+        return;
+    };
+    for prof in profiles.flatten() {
+        let webapps = prof.path().join("Web Applications");
+        let Ok(dirs) = std::fs::read_dir(&webapps) else {
+            continue;
+        };
+        for d in dirs.flatten() {
+            let dir_name = d.file_name();
+            let Some(name) = dir_name.to_str() else {
+                continue;
+            };
+            let Some(app_id) = name.strip_prefix("_crx_") else {
+                continue;
+            };
+            if map.contains_key(app_id) {
+                continue;
+            }
+            // 目录内有同名 <PWA名>.lnk 与 <PWA名>.ico，取 .lnk 主文件名
+            let Ok(files) = std::fs::read_dir(d.path()) else {
+                continue;
+            };
+            for f in files.flatten() {
+                let p = f.path();
+                if p.extension().is_some_and(|e| e.eq_ignore_ascii_case("lnk")) {
+                    if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+                        if !stem.is_empty() {
+                            map.insert(app_id.to_string(), stem.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// 供 lib.rs 取 PWA 显示名（未找到快捷方式时由调用方回退）
+pub fn pwa_app_name(app_id: &str) -> Option<String> {
+    pwa_names().get(app_id).cloned()
 }
 
 #[derive(Debug)]
@@ -163,18 +458,35 @@ unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) 
 struct EnumCtx {
     out: Vec<WinInfo>,
     monitors: Vec<Monitor>,
+    // pid → 该进程命令行 --app-id（无则空串），避免同进程多窗口重复读 PEB
+    app_ids: HashMap<u32, String>,
 }
 
 pub fn enum_windows() -> Vec<WinInfo> {
-    let monitors = enum_monitors();
-    let mut ctx = EnumCtx {
-        out: Vec::new(),
-        monitors,
-    };
-    unsafe {
-        EnumWindows(Some(enum_proc), &mut ctx as *mut EnumCtx as isize);
-    }
-    ctx.out
+    // 读窗口 AUMID 要求调用线程为 STA（MTA 下跨进程读回空）。调用方线程的套间
+    // 类型不可控（Tauri 运行时线程可能已是 MTA），故固定在新建的 STA 线程枚举。
+    std::thread::scope(|s| {
+        s.spawn(|| {
+            unsafe {
+                CoInitializeEx(
+                    std::ptr::null::<c_void>(),
+                    COINIT_APARTMENTTHREADED as u32,
+                );
+            }
+            let monitors = enum_monitors();
+            let mut ctx = EnumCtx {
+                out: Vec::new(),
+                monitors,
+                app_ids: HashMap::new(),
+            };
+            unsafe {
+                EnumWindows(Some(enum_proc), &mut ctx as *mut EnumCtx as isize);
+            }
+            ctx.out
+        })
+        .join()
+        .unwrap_or_default()
+    })
 }
 
 // DWM cloaked 判定：挂起的 UWP/后台应用、其它虚拟桌面的窗口，DWM 会标记为 cloaked。
@@ -223,7 +535,37 @@ unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
         return 1;
     }
     let ctx = &mut *(lparam as *mut EnumCtx);
-    let (process, path) = process_name(hwnd);
+    let (mut process, path) = process_name(hwnd);
+    // Chromium PWA 判定（窗口级）：PWA 进程会同时承载普通浏览窗口，不能只按进程
+    // 命令行分组。先用窗口 AUMID 的 "._crx_" 标记确认「这个窗口」是 PWA，再取
+    // 完整 app-id——优先进程命令行 --app-id（完整可靠），缺失时回退 AUMID 后缀。
+    if matches!(process.as_str(), "chrome.exe" | "msedge.exe") {
+        // 窗口 AUMID：PWA 窗口形如 "<宿主>._crx_<id>"（跨进程读可能被截断，仅取标记/后缀）
+        let aumid = window_aumid(hwnd);
+        let is_pwa_window = aumid.as_deref().is_some_and(|a| a.contains("._crx_"));
+        if is_pwa_window {
+            if !ctx.app_ids.contains_key(&own_pid) {
+                let id = process_command_line(own_pid)
+                    .and_then(|cmd| pwa_app_id(&cmd).map(str::to_string))
+                    .unwrap_or_default();
+                ctx.app_ids.insert(own_pid, id);
+            }
+            // 完整 id 优先进程命令行；缺失则回退本窗口 AUMID 后缀（可能截断，但仍独立成组）
+            let cmd_id = ctx.app_ids.get(&own_pid).map(String::as_str).unwrap_or("");
+            let id = if !cmd_id.is_empty() {
+                cmd_id.to_string()
+            } else {
+                aumid
+                    .as_deref()
+                    .and_then(|a| a.split("._crx_").nth(1))
+                    .unwrap_or("")
+                    .to_string()
+            };
+            if !id.is_empty() {
+                process = format!("{}{}", PWA_PROC_PREFIX, id);
+            }
+        }
+    }
     ctx.out.push(WinInfo {
         hwnd: hwnd as isize,
         title,
@@ -1033,5 +1375,29 @@ mod tests {
             // 本机/CI 未装 Chrome：断言无法执行，显式标注而非空转绿
             eprintln!("SKIP: Chrome 未安装（{} 不存在），full_name_not_truncated 未执行", p.display());
         }
+    }
+
+    #[test]
+    fn pwa_app_id_parses() {
+        // 承载 PWA 的浏览器进程命令行带 --app-id=<32 位小写>
+        assert_eq!(
+            pwa_app_id(r#""C:\Program Files\Google\Chrome\Application\chrome_proxy.exe" --profile-directory=Default --app-id=mjoklplbddabcmpepnokjaffbmgbkkgg"#),
+            Some("mjoklplbddabcmpepnokjaffbmgbkkgg")
+        );
+        assert_eq!(
+            pwa_app_id("msedge.exe --app-id=agimnkijcaahngcdmfeangaknmldooml --other"),
+            Some("agimnkijcaahngcdmfeangaknmldooml")
+        );
+        // 引号结尾也能截到
+        assert_eq!(
+            pwa_app_id(r#"chrome.exe --app-id=mjoklplbddabcmpepnokjaffbmgbkkgg""#),
+            Some("mjoklplbddabcmpepnokjaffbmgbkkgg")
+        );
+        // 普通浏览器窗口进程命令行无 --app-id → None
+        assert_eq!(pwa_app_id(r#"chrome.exe --type=browser"#), None);
+        // app-id 长度/字符非法 → None，防把其它参数误判成 PWA
+        assert_eq!(pwa_app_id("chrome.exe --app-id=short"), None);
+        assert_eq!(pwa_app_id("chrome.exe --app-id=MJOKLPLBDDABCMPEPNOKJAFFBMGKKGG"), None);
+        assert_eq!(pwa_app_id("anything"), None);
     }
 }

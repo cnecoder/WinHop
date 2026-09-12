@@ -11,6 +11,9 @@ import {
 const { listen } = window.__TAURI__.event;
 const { invoke } = window.__TAURI__.core;
 
+// 与后端 windows::PWA_PROC_PREFIX 一致：Chromium PWA 的虚拟进程键前缀
+const PWA_PROC_PREFIX = "pwa#";
+
 const appEl = document.getElementById("app");
 const titleEl = document.getElementById("title");
 const listEl = document.getElementById("list");
@@ -861,10 +864,14 @@ function render(s) {
                 ? "key key-cfg"
                 : "key key-off";
             const wide = p.key && p.key.length > 1 ? " key-wide" : "";
+            // PWA 虚拟进程（pwa#<app-id>，与浏览器同 exe）不显示内部键，只标 PWA
+            const procLabel = p.process.startsWith(PWA_PROC_PREFIX)
+              ? "PWA"
+              : p.process;
             return (
               `<div class="row${p.active ? " active" : ""}${p.running ? "" : " off"}" data-key="${escapeHtml(p.key)}" data-process="${escapeHtml(p.process)}">` +
               `<span class="key-slot"><span class="${keyCls}${wide}">${hasKey ? escapeHtml(p.key) : "·"}</span></span>` +
-              `<span class="name">${escapeHtml(p.name)} (${escapeHtml(p.process)})</span>` +
+              `<span class="name">${escapeHtml(p.name)} (${escapeHtml(procLabel)})</span>` +
               `<span class="screen">${p.running ? "×" + p.count : t("notRunning")}</span>` +
               `<button class="edit-btn" title="${t("edit")}">✎</button>` +
               `</div>`
