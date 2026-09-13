@@ -27,15 +27,19 @@ struct ChangelogEntry {
 
 // 当前版本的更新记录（设置页只显示当前版本，按界面语言取中/英文）
 const CURRENT_CHANGELOG: ChangelogEntry = ChangelogEntry {
-    version: "0.3.4",
+    version: "0.3.5",
     date: "2026-09",
     notes_zh: &[
-        "新增删除程序配置：✎ 编辑面板里点「删除」即可移除不再需要的软件名称和代号——未运行的程序不再灰色占位，列表更干净；运行中的程序仍会以未配置（·）出现，随时可重新配",
-        "「删除」与「屏蔽」区分清楚：删除只是清掉你保存的名称/代号（程序运行时仍列出）；屏蔽则把程序加入黑名单、运行时也彻底隐藏（设置页可解除）",
+        "程序卡片现在随屏幕分辨率自动缩放：不管是 1080p、2K 还是高 DPI 缩放，卡片都会等比放大或缩小、整页始终铺满屏幕，不会出现只占半屏或被裁切",
+        "设置页新增「每页卡片数」：−/+ 调整偏好数量，步进范围按当前屏幕自动限定（卡片不会过大或过小），点「重置」一键回到本屏推荐值",
+        "浏览器「安装成应用」的网站（PWA）现在独立成程序：Chrome 安装的 PWA、以及 Edge 新版安装为托管应用的 PWA 都不再被并进 chrome/Edge 里，各自有独立卡片和代号，自动读取应用名称",
+        "新增内置帮助页：按 F1 或点头部「?」随时查看两层选择、数字编号、翻页等全部按键说明",
     ],
     notes_en: &[
-        "New: delete a program's config — in the ✎ edit panel, click \"Delete\" to remove a saved name/code you no longer need. Programs that aren't running no longer clutter the list in grey; ones that are running still show up unconfigured (·) and can be re-configured anytime",
-        "\"Delete\" vs \"Block\" made clear: Delete only clears the saved name/code (the app still appears while running); Block adds it to a blacklist and hides it entirely, even while running (unblock in settings)",
+        "Program cards now auto-scale with your screen resolution: on 1080p, 2K, or high-DPI scaling, cards grow or shrink proportionally so a full page always fills the screen — no more half-empty pages or clipped cards",
+        "New \"Cards per page\" setting: adjust your preferred count with −/+, the range is auto-limited per screen (cards never too large or small), and \"Reset\" returns to the recommended count for this screen",
+        "Websites \"installed as apps\" (PWAs) are now standalone programs: Chrome PWAs and new-style Edge PWAs installed as hosted apps no longer merge into chrome/Edge — each gets its own card and code, with the app name read automatically",
+        "New built-in help page: press F1 or click \"?\" in the header anytime for a full key reference (two-layer selection, numbering, paging, and more)",
     ],
 };
 
