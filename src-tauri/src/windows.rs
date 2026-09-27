@@ -5,7 +5,8 @@ use std::sync::{Arc, OnceLock};
 
 use windows_sys::core::GUID;
 use windows_sys::Win32::System::Com::{
-    CoInitializeEx, COINIT_APARTMENTTHREADED, StructuredStorage::PROPVARIANT,
+    CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
+    StructuredStorage::PROPVARIANT,
 };
 use windows_sys::Win32::System::Variant::VT_LPWSTR;
 use windows_sys::Win32::UI::Shell::PropertiesSystem::{PROPERTYKEY, SHGetPropertyStoreForWindow};
@@ -28,8 +29,9 @@ use windows_sys::Win32::Storage::FileSystem::{
 };
 use windows_sys::Win32::System::Console::{SetStdHandle, STD_ERROR_HANDLE};
 use windows_sys::Win32::System::Registry::{
-    RegCloseKey, RegCreateKeyExW, RegDeleteValueW, RegEnumKeyExW, RegOpenKeyExW, RegSetValueExW,
-    HKEY, HKEY_CURRENT_USER, KEY_READ, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_SZ,
+    RegCloseKey, RegCreateKeyExW, RegDeleteValueW, RegEnumKeyExW, RegOpenKeyExW, RegQueryValueW,
+    RegSetValueExW, HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_SET_VALUE,
+    REG_OPTION_NON_VOLATILE, REG_SZ,
 };
 use windows_sys::Win32::System::Threading::{
     CreateMutexW, GetCurrentProcess, GetCurrentProcessId, GetCurrentThreadId, OpenProcess,
@@ -42,9 +44,9 @@ use windows_sys::Win32::Globalization::{
 };
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    BringWindowToTop, CallNextHookEx, EnumWindows, GetClassNameW, GetClientRect,
+    BringWindowToTop, CallNextHookEx, DestroyIcon, EnumWindows, GetClassNameW, GetClientRect,
     GetForegroundWindow, GetWindowLongW, GetWindowPlacement, GetWindowRect, GetWindowTextW,
-    GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, MSLLHOOKSTRUCT,
+    GetWindowThreadProcessId, ICONINFO, IsIconic, IsWindow, IsWindowVisible, MSLLHOOKSTRUCT,
     SetForegroundWindow, SetWindowsHookExW, WS_EX_TOOLWINDOW, GWL_EXSTYLE,
     ShowWindow, SM_CYCAPTION, SM_CXPADDEDBORDER, SM_CXSIZEFRAME, SM_CYSIZEFRAME,
     SPIF_SENDCHANGE, SPI_GETFOREGROUNDLOCKTIMEOUT, SPI_SETFOREGROUNDLOCKTIMEOUT,
@@ -847,6 +849,120 @@ pub fn file_description(path: &str) -> Option<String> {
     }
 }
 
+// ===== 程序图标提取（列表行展示）：SHGetFileInfoW 取 32px HICON → GetIconInfo 拆出
+// 颜色位图 → GetDIBits 读自顶向下 32bpp BGRA → 还原预乘 alpha 转直通 RGBA。
+// 返回 (宽, 高, RGBA)，调用方 base64 后随 icons 事件下发，前端用 canvas 生成
+// dataURL（Rust 不做 PNG 编码，免引 image/png 依赖）。
+pub fn extract_icon_rgba(path: &str) -> Option<(u32, u32, Vec<u8>)> {
+    use windows_sys::Win32::UI::Shell::{SHGFI_ICON, SHGFI_LARGEICON, SHFILEINFOW, SHGetFileInfoW};
+    unsafe {
+        let wide = to_wide(path);
+        let mut sfi: SHFILEINFOW = std::mem::zeroed();
+        let ok = SHGetFileInfoW(
+            wide.as_ptr(),
+            0,
+            &mut sfi,
+            std::mem::size_of::<SHFILEINFOW>() as u32,
+            SHGFI_ICON | SHGFI_LARGEICON,
+        );
+        if ok == 0 || sfi.hIcon.is_null() {
+            return None;
+        }
+        let out = icon_rgba(sfi.hIcon);
+        DestroyIcon(sfi.hIcon);
+        out
+    }
+}
+
+// HICON → RGBA 像素。GetDIBits 两次调用：首次传 null 位让 GDI 回填实际尺寸，第二次读像素。
+unsafe fn icon_rgba(hicon: *mut c_void) -> Option<(u32, u32, Vec<u8>)> {
+    use windows_sys::Win32::Graphics::Gdi::{
+        CreateCompatibleDC, DeleteDC, DeleteObject, GetDIBits, BITMAPINFO, BITMAPINFOHEADER,
+        BI_RGB, DIB_RGB_COLORS,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetIconInfo;
+    unsafe {
+        let mut info: ICONINFO = std::mem::zeroed();
+        if GetIconInfo(hicon as _, &mut info) == 0 {
+            return None;
+        }
+        let out = (|| {
+            // 单色图标无 hbmColor（应用图标基本都是彩色）；不支持，返回 None 走空槽
+            let color = info.hbmColor;
+            if color.is_null() {
+                return None;
+            }
+            let hdc = CreateCompatibleDC(std::ptr::null_mut());
+            if hdc.is_null() {
+                return None;
+            }
+            let out = (|| {
+                let mut bmi: BITMAPINFO = std::mem::zeroed();
+                bmi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
+                if GetDIBits(
+                    hdc,
+                    color,
+                    0,
+                    0,
+                    std::ptr::null_mut(),
+                    &mut bmi,
+                    DIB_RGB_COLORS,
+                ) == 0
+                {
+                    return None;
+                }
+                let (w, h) = (bmi.bmiHeader.biWidth, bmi.bmiHeader.biHeight.abs());
+                if w <= 0 || h <= 0 {
+                    return None;
+                }
+                // 负 biHeight = 自顶向下行序（与前端 ImageData 行序一致）；强制 32bpp BGRA
+                bmi.bmiHeader.biHeight = -h;
+                bmi.bmiHeader.biBitCount = 32;
+                bmi.bmiHeader.biCompression = BI_RGB;
+                let mut px = vec![0u8; (w as usize) * (h as usize) * 4];
+                if GetDIBits(
+                    hdc,
+                    color,
+                    0,
+                    h as u32,
+                    px.as_mut_ptr() as *mut c_void,
+                    &mut bmi,
+                    DIB_RGB_COLORS,
+                ) == 0
+                {
+                    return None;
+                }
+                // 图标位图是预乘 alpha：c_out = c_premul * 255 / a 还原为直通 alpha
+                for p in px.chunks_exact_mut(4) {
+                    let (b, g, r, a) = (p[0], p[1], p[2], p[3]);
+                    if a > 0 && a < 255 {
+                        let un =
+                            |c: u8| ((c as u32 * 255 + a as u32 / 2) / a as u32).min(255) as u8;
+                        p[0] = un(r);
+                        p[1] = un(g);
+                        p[2] = un(b);
+                    } else {
+                        p[0] = r;
+                        p[1] = g;
+                        p[2] = b;
+                    }
+                    p[3] = a;
+                }
+                Some((w as u32, h as u32, px))
+            })();
+            DeleteDC(hdc);
+            out
+        })();
+        if !info.hbmColor.is_null() {
+            DeleteObject(info.hbmColor);
+        }
+        if !info.hbmMask.is_null() {
+            DeleteObject(info.hbmMask);
+        }
+        out
+    }
+}
+
 #[derive(Clone, Copy)]
 struct Monitor {
     rect: RECT,
@@ -1011,8 +1127,17 @@ fn effective_source(hwnd: HWND) -> (i32, i32, i32, i32, bool) {
                 rcNormalPosition: RECT { left: 0, top: 0, right: 0, bottom: 0 },
             };
             if GetWindowPlacement(hwnd, &mut wp) != 0 {
+                // 最小化窗口的 DWM 源空间原点在窗口外沿：采样区域含 1px 可见边框与
+                // 标题栏（曾表现为预览/缩略图边缘白线 + 标题条）。两条路径都把源
+                // 原点偏移到客户区 (fx, fy+cap)，尺寸取客户区。
+                let dpi = GetDpiForWindow(hwnd).max(96);
+                let fx = GetSystemMetricsForDpi(SM_CXSIZEFRAME, dpi)
+                    + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+                let fy = GetSystemMetricsForDpi(SM_CYSIZEFRAME, dpi)
+                    + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+                let cap = GetSystemMetricsForDpi(SM_CYCAPTION, dpi);
                 // 最大化后最小化（WPF_RESTORETOMAXIMIZED）：rcNormalPosition 是"还原尺寸"
-                // （如默认 1024x768），与当前最大化内容无关——内容尺寸取显示器工作区
+                // （如默认 1024x768），与当前最大化内容无关——客户区尺寸取显示器工作区
                 if wp.flags & WPF_RESTORETOMAXIMIZED != 0 {
                     let mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
                     let mut mi = MONITORINFO {
@@ -1027,47 +1152,48 @@ fn effective_source(hwnd: HWND) -> (i32, i32, i32, i32, bool) {
                             mi.rcWork.bottom - mi.rcWork.top,
                         );
                         eprintln!(
-                            "[t={}] 缩略图最小化源(最大化) hwnd={:#x} workarea={}x{}",
+                            "[t={}] 缩略图最小化源(最大化) hwnd={:#x} workarea={}x{} client=({},{}) {}x{}",
                             now_ms(),
                             hwnd as isize,
                             mw,
-                            mh
+                            mh,
+                            fx,
+                            fy + cap,
+                            mw,
+                            mh - cap
                         );
-                        if mw > 0 && mh > 0 {
-                            return (mw, mh, 0, 0, true);
+                        if mw > 0 && mh > cap {
+                            return (mw, mh - cap, fx, fy + cap, true);
                         }
                     }
                 }
                 let n = wp.rcNormalPosition;
                 // 浮动窗口：还原尺寸即内容尺寸（rcNormalPosition 为 96 基准虚拟坐标，换回物理）
-                let dpi = GetDpiForWindow(hwnd).max(96);
                 let s = dpi as f64 / 96.0;
                 let (nw, nh) = (
                     ((n.right - n.left) as f64 * s) as i32,
                     ((n.bottom - n.top) as f64 * s) as i32,
                 );
                 if nw > 0 && nh > 0 {
-                    // 扣除物理边框对齐客户区
-                    let fx =
-                        GetSystemMetricsForDpi(SM_CXSIZEFRAME, dpi) + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
-                    let fy =
-                        GetSystemMetricsForDpi(SM_CYSIZEFRAME, dpi) + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
-                    let cap = GetSystemMetricsForDpi(SM_CYCAPTION, dpi);
+                    // 尺寸已扣除物理边框与标题栏；原点同样偏移到客户区（与上方
+                    // RESTORETOMAXIMIZED 路径同模型：源空间原点在窗口外沿）
                     let (ew, eh) = (nw - 2 * fx, nh - 2 * fy - cap);
                     eprintln!(
-                        "[t={}] 缩略图最小化源(浮动) hwnd={:#x} dpi={} normal={}x{} client={}x{}",
+                        "[t={}] 缩略图最小化源(浮动) hwnd={:#x} dpi={} normal={}x{} client=({},{}) {}x{}",
                         now_ms(),
                         hwnd as isize,
                         dpi,
                         nw,
                         nh,
+                        fx,
+                        fy + cap,
                         ew,
                         eh
                     );
                     if ew > 0 && eh > 0 {
-                        return (ew, eh, 0, 0, true);
+                        return (ew, eh, fx, fy + cap, true);
                     }
-                    return (nw, nh, 0, 0, true);
+                    return (nw - 2 * fx, nh - 2 * fy - cap, fx, fy + cap, true);
                 }
             }
         }
@@ -1165,6 +1291,20 @@ pub fn thumb_set(
             DWM_TNP_RECTDESTINATION | DWM_TNP_VISIBLE | DWM_TNP_RECTSOURCE,
             RECT { left: ox, top: oy, right: ox + cw, bottom: oy + ch },
         )
+    };
+    // 源矩形四边内缩 6px：裁掉源窗口边缘的亮色线。 explorer 等自绘边框的应用在
+    // 客户区 2~4px 处画一圈浅灰内边框（实测 3px 内缩恰好落在线上），6px 彻底跳过；
+    // 另含 Win10 窗口自身的 1px 可见边框与最小化路径的度量误差。预览/缩略图尺度
+    // 下损失 6px 内容不可感知
+    let rcs = if rcs.right - rcs.left > 12 && rcs.bottom - rcs.top > 12 {
+        RECT {
+            left: rcs.left + 6,
+            top: rcs.top + 6,
+            right: rcs.right - 6,
+            bottom: rcs.bottom - 6,
+        }
+    } else {
+        rcs
     };
     let visible = 1;
     let props = DWM_THUMBNAIL_PROPERTIES {
@@ -1477,6 +1617,240 @@ pub fn set_autostart(enable: bool) -> Result<(), String> {
     }
 }
 
+// 未运行程序的 exe 全路径：查注册表 App Paths（HKLM 优先、HKCU 兜底）。多数安装器
+// 会登记 <名>.exe 子键，默认值为完整 exe 路径（偶有引号/参数尾巴，剥掉）。
+// 找不到或路径不是文件 → None。供未运行程序的图标提取兜底（运行中窗口走窗口枚举）。
+pub fn app_paths_lookup(process: &str) -> Option<String> {
+    let subkeys = [
+        format!(
+            "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\{}",
+            if process.to_lowercase().ends_with(".exe") {
+                process.to_string()
+            } else {
+                format!("{}.exe", process)
+            }
+        ),
+        format!(
+            "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\{}",
+            process
+        ),
+    ];
+    for (i, sub) in subkeys.iter().enumerate() {
+        let hive = if i == 0 {
+            HKEY_LOCAL_MACHINE
+        } else {
+            HKEY_CURRENT_USER
+        };
+        // 同一子键 HKLM 找不到才试 HKCU；第二条子键（无 .exe 后缀名）仅在
+        // process 本身不带 .exe 时与第一条不同，否则重复查询直接落空
+        if i == 1 && subkeys[0].to_lowercase() == subkeys[1].to_lowercase() {
+            continue;
+        }
+        let wide = to_wide(sub);
+        let mut hkey: HKEY = std::ptr::null_mut();
+        unsafe {
+            if RegOpenKeyExW(hive, wide.as_ptr(), 0, KEY_READ, &mut hkey) != 0 || hkey.is_null() {
+                continue;
+            }
+            let mut buf = [0u16; 1024];
+            let mut size = (buf.len() * std::mem::size_of::<u16>()) as i32;
+            let ok = RegQueryValueW(hkey, std::ptr::null(), buf.as_mut_ptr(), &mut size);
+            RegCloseKey(hkey);
+            if ok != 0 {
+                continue;
+            }
+            let len = buf
+                .iter()
+                .take((size.max(0) as usize) / 2)
+                .position(|&c| c == 0)
+                .unwrap_or((size.max(0) as usize) / 2);
+            let val = String::from_utf16_lossy(&buf[..len]);
+            let path = val.trim().trim_matches('"').to_string();
+            // 剥掉可能拼上的参数尾巴
+            let path = match path.find(" -").or_else(|| path.find(" /")) {
+                Some(i) => path[..i].trim().to_string(),
+                None => path,
+            };
+            if !path.is_empty()
+                && std::path::Path::new(&path).is_file()
+                && path.to_lowercase().ends_with(".exe")
+            {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
+// ===== 开始菜单 .lnk 索引：未运行程序图标兜底（PowerToys Run / Flow Launcher 等
+// 启动器的标准做法）。首次需要时惰性构建一次：递归扫描两个开始菜单 Programs 目录，
+// IShellLink COM 逐个解析目标 exe，按「目标文件名（小写）→ 完整路径」建索引；
+// 之后所有进程的匹配查询零开销。COM vtable 手写（windows-sys 无自动化接口）。
+
+#[repr(C)]
+struct ShellLinkVt {
+    query_interface: unsafe extern "system" fn(*mut c_void, *const GUID, *mut *mut c_void) -> i32,
+    add_ref: unsafe extern "system" fn(*mut c_void) -> u32,
+    release: unsafe extern "system" fn(*mut c_void) -> u32,
+    get_path: unsafe extern "system" fn(*mut c_void, *mut u16, i32, *mut c_void, u32) -> i32,
+}
+
+#[repr(C)]
+struct PersistFileVt {
+    query_interface: unsafe extern "system" fn(*mut c_void, *const GUID, *mut *mut c_void) -> i32,
+    add_ref: unsafe extern "system" fn(*mut c_void) -> u32,
+    release: unsafe extern "system" fn(*mut c_void) -> u32,
+    get_class_id: unsafe extern "system" fn(*mut c_void, *mut GUID) -> i32,
+    is_dirty: unsafe extern "system" fn(*mut c_void) -> i32,
+    load: unsafe extern "system" fn(*mut c_void, *const u16, u32) -> i32,
+}
+
+// CLSID_ShellLink {00021401-0000-0000-C000-000000000046}
+const CLSID_SHELL_LINK: GUID = GUID {
+    data1: 0x00021401,
+    data2: 0x0000,
+    data3: 0x0000,
+    data4: [0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46],
+};
+// IID_IPersistFile {0000010B-0000-0000-C000-000000000046}
+const IID_IPERSIST_FILE: GUID = GUID {
+    data1: 0x0000010B,
+    data2: 0x0000,
+    data3: 0x0000,
+    data4: [0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46],
+};
+// IID_IShellLinkW {000214F9-0000-0000-C000-000000000046}
+const IID_ISHELL_LINK_W: GUID = GUID {
+    data1: 0x000214F9,
+    data2: 0x0000,
+    data3: 0x0000,
+    data4: [0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46],
+};
+
+// 解析单个 .lnk 的目标路径（非快捷方式/无路径目标 → None）
+fn resolve_lnk(path: &std::path::Path) -> Option<String> {
+    use windows_sys::Win32::System::Com::CoCreateInstance;
+    unsafe {
+        let mut pf: *mut c_void = std::ptr::null_mut();
+        if CoCreateInstance(
+            &CLSID_SHELL_LINK,
+            std::ptr::null_mut(),
+            CLSCTX_INPROC_SERVER,
+            &IID_IPERSIST_FILE,
+            &mut pf as *mut _ as *mut *mut c_void,
+        ) != 0
+            || pf.is_null()
+        {
+            return None;
+        }
+        let result = (|| -> Option<String> {
+            // vtable 两步解引用：先读对象首字段的 vtable 指针，再取函数表
+            let pf_vt = unsafe { &**(pf as *const *mut PersistFileVt) };
+            let wide = to_wide(&path.to_string_lossy());
+            if (pf_vt.load)(pf, wide.as_ptr(), 0) != 0 {
+                return None;
+            }
+            let mut sl: *mut c_void = std::ptr::null_mut();
+            let qi = pf_vt.query_interface;
+            if qi(pf, &IID_ISHELL_LINK_W, &mut sl as *mut _ as *mut *mut c_void) != 0
+                || sl.is_null()
+            {
+                return None;
+            }
+            let out = (|| -> Option<String> {
+                let sl_vt = unsafe { &**(sl as *const *mut ShellLinkVt) };
+                let mut buf = [0u16; 1024];
+                if (sl_vt.get_path)(sl, buf.as_mut_ptr(), buf.len() as i32, std::ptr::null_mut(), 0)
+                    != 0
+                {
+                    return None;
+                }
+                let len = buf.iter().position(|&c| c == 0).unwrap_or(0);
+                if len == 0 {
+                    return None;
+                }
+                let target = String::from_utf16_lossy(&buf[..len]);
+                let target = target.trim().to_string();
+                if target.is_empty() || !std::path::Path::new(&target).is_file() {
+                    return None;
+                }
+                Some(target)
+            })();
+            let sl_vt = unsafe { &**(sl as *const *mut ShellLinkVt) };
+            (sl_vt.release)(sl);
+            out
+        })();
+        let pf_vt = unsafe { &**(pf as *const *mut PersistFileVt) };
+        (pf_vt.release)(pf);
+        result
+    }
+}
+
+fn collect_lnks(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>, depth: u32) {
+    if depth > 4 {
+        return;
+    }
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                collect_lnks(&p, out, depth + 1);
+            } else if p
+                .extension()
+                .map(|x| x.eq_ignore_ascii_case("lnk"))
+                .unwrap_or(false)
+            {
+                out.push(p);
+            }
+        }
+    }
+}
+
+// 进程名（小写 exe 文件名）→ 开始菜单快捷方式目标 exe 的完整路径。惰性构建一次。
+pub fn lnk_lookup(process: &str) -> Option<String> {
+    static INDEX: OnceLock<HashMap<String, String>> = OnceLock::new();
+    let key = process.to_lowercase();
+    let index = INDEX.get_or_init(|| {
+        let mut map: HashMap<String, String> = HashMap::new();
+        unsafe {
+            CoInitializeEx(std::ptr::null::<c_void>(), COINIT_APARTMENTTHREADED as u32);
+        }
+        let mut lnks: Vec<std::path::PathBuf> = Vec::new();
+        let mut roots: Vec<std::path::PathBuf> = Vec::new();
+        if let Ok(pd) = std::env::var("ProgramData") {
+            roots.push(std::path::PathBuf::from(pd)
+                .join("Microsoft\\Windows\\Start Menu\\Programs"));
+        }
+        if let Ok(ad) = std::env::var("APPDATA") {
+            roots.push(
+                std::path::PathBuf::from(ad).join("Microsoft\\Windows\\Start Menu\\Programs"),
+            );
+        }
+        for root in &roots {
+            collect_lnks(root, &mut lnks, 0);
+        }
+        for lnk in &lnks {
+            if let Some(target) = resolve_lnk(lnk) {
+                let name = std::path::Path::new(&target)
+                    .file_name()
+                    .map(|f| f.to_string_lossy().to_lowercase())
+                    .unwrap_or_default();
+                if !name.is_empty() {
+                    map.entry(name).or_insert(target);
+                }
+            }
+        }
+        eprintln!(
+            "[t={}] 开始菜单 lnk 索引构建完成: {} 个 lnk, {} 个目标",
+            now_ms(),
+            lnks.len(),
+            map.len()
+        );
+        map
+    });
+    index.get(&key).cloned()
+}
+
 fn to_wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
@@ -1533,6 +1907,86 @@ mod tests {
             // 本机/CI 未装 Chrome：断言无法执行，显式标注而非空转绿
             eprintln!("SKIP: Chrome 未安装（{} 不存在），full_name_not_truncated 未执行", p.display());
         }
+    }
+
+    // 图标提取冒烟：notepad.exe 应取到非空 RGBA（尺寸>0、至少一个非全透明像素）。
+    // SHGetFileInfoW/GetDIBits 链路依赖系统二进制，缺失时显式 SKIP
+    #[test]
+    fn extract_icon_smoke() {
+        let p = "C:\\Windows\\System32\\notepad.exe";
+        if !std::path::Path::new(p).exists() {
+            eprintln!("SKIP: {} 不存在，图标提取未验证", p);
+            return;
+        }
+        let (w, h, px) = extract_icon_rgba(p).expect("notepad.exe 应能取到图标");
+        assert!(w > 0 && h > 0, "图标尺寸非法 {}x{}", w, h);
+        assert_eq!(px.len(), (w * h * 4) as usize, "RGBA 长度与尺寸不符");
+        assert!(
+            px.chunks_exact(4).any(|p| p[3] != 0),
+            "图标全透明，alpha 通道异常"
+        );
+        eprintln!("图标 {}x{} 提取正常", w, h);
+    }
+
+    // App Paths 查询冒烟：本机装有 Chrome 时应查到其完整路径（多数安装器登记注册表）；
+    // 未装时显式 SKIP。同时验证找不到的程序名返回 None 而非 panic
+    #[test]
+    fn app_paths_lookup_smoke() {
+        if std::path::Path::new("C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe")
+            .exists()
+        {
+            match app_paths_lookup("chrome.exe") {
+                Some(p) => {
+                    assert!(p.to_lowercase().ends_with("chrome.exe"), "查到非 chrome 路径: {}", p);
+                    assert!(std::path::Path::new(&p).is_file(), "查到的路径不是文件: {}", p);
+                }
+                None => eprintln!("SKIP: chrome.exe 未登记 App Paths（便携安装）"),
+            }
+        } else {
+            eprintln!("SKIP: 本机未装 Chrome，App Paths 查询未验证");
+        }
+        assert_eq!(app_paths_lookup("definitely-not-installed-xyz.exe"), None);
+    }
+
+    // 开始菜单 lnk 解析冒烟：VS Code / Chrome 装机时其开始菜单快捷方式应能解析出
+    // 目标 exe；未装环境显式 SKIP
+    #[test]
+    fn lnk_lookup_smoke() {
+        for (proc, marker) in [
+            ("code.exe", "C:\\Program Files\\Microsoft VS Code\\Code.exe"),
+            ("chrome.exe", "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"),
+        ] {
+            let installed = std::path::Path::new(marker).exists()
+                || std::path::Path::new(
+                    &std::env::var("LOCALAPPDATA")
+                        .map(|d| format!("{}\\Programs\\Microsoft VS Code\\Code.exe", d))
+                        .unwrap_or_default(),
+                )
+                .exists();
+            if proc == "chrome.exe"
+                && !std::path::Path::new(
+                    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+                )
+                .exists()
+            {
+                eprintln!("SKIP: {} 未安装", proc);
+                continue;
+            }
+            if proc == "code.exe" && !installed {
+                eprintln!("SKIP: {} 未安装", proc);
+                continue;
+            }
+            match lnk_lookup(proc) {
+                Some(p) => assert!(
+                    p.to_lowercase().ends_with(&proc.to_lowercase()),
+                    "解析结果与进程名不符: {} -> {}",
+                    proc,
+                    p
+                ),
+                None => eprintln!("SKIP: {} 开始菜单未找到快捷方式", proc),
+            }
+        }
+        assert_eq!(lnk_lookup("definitely-not-installed-xyz.exe"), None);
     }
 
     #[test]

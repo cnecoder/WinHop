@@ -10,7 +10,7 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 use crate::windows;
 use crate::{
     config::{
-        self, WinDigitMode, WindowOrder, PROG_PAGE_SIZE_MAX, PROG_PAGE_SIZE_MIN,
+        self, OverlayBg, WinDigitMode, WindowOrder, PROG_PAGE_SIZE_MAX, PROG_PAGE_SIZE_MIN,
     },
     Inner,
 };
@@ -27,19 +27,21 @@ struct ChangelogEntry {
 
 // 当前版本的更新记录（设置页只显示当前版本，按界面语言取中/英文）
 const CURRENT_CHANGELOG: ChangelogEntry = ChangelogEntry {
-    version: "0.3.5",
+    version: "0.4.0",
     date: "2026-09",
     notes_zh: &[
-        "程序卡片现在随屏幕分辨率自动缩放：不管是 1080p、2K 还是高 DPI 缩放，卡片都会等比放大或缩小、整页始终铺满屏幕，不会出现只占半屏或被裁切",
-        "设置页新增「每页卡片数」：−/+ 调整偏好数量，步进范围按当前屏幕自动限定（卡片不会过大或过小），点「重置」一键回到本屏推荐值",
-        "浏览器「安装成应用」的网站（PWA）现在独立成程序：Chrome 安装的 PWA、以及 Edge 新版安装为托管应用的 PWA 都不再被并进 chrome/Edge 里，各自有独立卡片和代号，自动读取应用名称",
-        "新增内置帮助页：按 F1 或点头部「?」随时查看两层选择、数字编号、翻页等全部按键说明",
+        "程序列表现在显示应用图标：运行中的程序直接显示，未运行的程序也会自动探测（运行过一次即记住路径，另支持注册表与开始菜单快捷方式解析）；PWA 显示宿主浏览器图标",
+        "背景效果可选：不透明暗色（默认）或 Acrylic 系统级毛玻璃模糊，设置页一键切换、即时预览",
+        "界面动效全面升级：呼出时程序行逐行入场、进入窗口层柔和淡入、退出类关闭短促淡出（可关闭；切换窗口类操作始终瞬时，不牺牲速度）",
+        "窗口层重新设计：16:9 缩略图恰好铺满 6 行、右侧实时预览更大、不再显示滚动条，选中窗口以「高亮行 + 实心数字徽章」清晰标示",
+        "修复若干显示问题：退出/切换时屏幕顶端不再出现白色横条，预览与缩略图边缘不再有亮线残留，列表选中高亮不再随代号长度错位",
     ],
     notes_en: &[
-        "Program cards now auto-scale with your screen resolution: on 1080p, 2K, or high-DPI scaling, cards grow or shrink proportionally so a full page always fills the screen — no more half-empty pages or clipped cards",
-        "New \"Cards per page\" setting: adjust your preferred count with −/+, the range is auto-limited per screen (cards never too large or small), and \"Reset\" returns to the recommended count for this screen",
-        "Websites \"installed as apps\" (PWAs) are now standalone programs: Chrome PWAs and new-style Edge PWAs installed as hosted apps no longer merge into chrome/Edge — each gets its own card and code, with the app name read automatically",
-        "New built-in help page: press F1 or click \"?\" in the header anytime for a full key reference (two-layer selection, numbering, paging, and more)",
+        "Program lists now show application icons: running programs directly, and not-running ones are auto-discovered too (the install path is remembered after the first run, with registry and Start Menu shortcut resolution as fallbacks); PWAs show their host browser icon",
+        "Background effects: choose between opaque dark (default) and Acrylic system-level blur, switchable in Settings with live preview",
+        "Interface animations upgraded: program rows cascade in on launch, the window layer fades in softly, and dismissals fade out briefly (optional; window switching is always instant, never slowed down)",
+        "Redesigned window layer: 16:9 thumbnails filling exactly 6 rows, a larger live preview, no scrollbars, and the selected window is clearly marked with a highlighted row plus a solid number badge",
+        "Fixed several display issues: no more white bar at the top of the screen when exiting or switching, no more bright line residue around the preview and thumbnails, and list selection no longer misaligns with variable-length codes",
     ],
 };
 
@@ -54,6 +56,10 @@ pub(crate) struct SettingsInfo {
     win_digit_mode: String,
     /// 程序层每页卡片数（驱动卡片自适应缩放）
     prog_page_size: usize,
+    /// 覆盖层背景效果 id：solid/translucent/acrylic（显示名由前端 i18n 负责）
+    overlay_bg: String,
+    /// 退出类关闭是否淡出（切换类关闭始终瞬时）
+    close_anim: bool,
     /// 当前生效语言（cfg.lang 为空则取系统检测值）
     lang: String,
     /// 配置里保存的语言（空=跟随系统；用于区分"明确选了 zh-CN"与"跟随系统恰好是中文"）
@@ -99,6 +105,8 @@ pub(crate) fn get_settings(app: AppHandle) -> SettingsInfo {
         theme: cfg.theme.clone(),
         win_digit_mode: cfg.win_digit_mode.as_str().into(),
         prog_page_size: cfg.prog_page_size,
+        overlay_bg: cfg.overlay_bg.as_str().into(),
+        close_anim: cfg.close_anim,
         // 当前生效语言：配置指定优先，空则跟随系统
         lang: if cfg.lang.is_empty() {
             windows::system_lang().to_string()
@@ -139,6 +147,12 @@ pub(crate) struct SettingsInput {
     /// 程序层每页卡片数（范围 MIN..=MAX）
     #[serde(default)]
     pub(crate) prog_page_size: usize,
+    /// 覆盖层背景效果：solid/translucent/acrylic
+    #[serde(default)]
+    pub(crate) overlay_bg: String,
+    /// 退出类关闭淡出开关
+    #[serde(default)]
+    pub(crate) close_anim: bool,
     /// 界面语言（"zh-CN"/"en"；空串=跟随系统，由前端传 system 表达）
     #[serde(default)]
     pub(crate) lang: String,
@@ -161,6 +175,11 @@ pub(crate) fn save_settings(app: AppHandle, input: SettingsInput) -> Result<(), 
     let win_digit_mode = WinDigitMode::parse(&input.win_digit_mode);
     if win_digit_mode.as_str() != input.win_digit_mode {
         return Err(format!("无效的数字键行为「{}」", input.win_digit_mode));
+    }
+    // 背景效果：字符串须能往返解析（非法值拒绝）
+    let overlay_bg = OverlayBg::parse(&input.overlay_bg);
+    if overlay_bg.as_str() != input.overlay_bg {
+        return Err(format!("无效的背景效果「{}」", input.overlay_bg));
     }
     // 每页卡片数：0（前端缺省/旧版）按默认 20，其余必须在 [MIN, MAX]
     let prog_page_size = if input.prog_page_size == 0 {
@@ -235,6 +254,8 @@ pub(crate) fn save_settings(app: AppHandle, input: SettingsInput) -> Result<(), 
         cfg.autostart = input.autostart;
         cfg.theme = input.theme.clone();
         cfg.win_digit_mode = win_digit_mode;
+        cfg.overlay_bg = overlay_bg;
+        cfg.close_anim = input.close_anim;
         cfg.prog_page_size = prog_page_size;
         cfg.lang = lang;
         if new_sc.is_some() {
@@ -250,12 +271,16 @@ pub(crate) fn save_settings(app: AppHandle, input: SettingsInput) -> Result<(), 
         return Err(format!("保存配置失败: {}", e));
     }
     eprintln!(
-        "[t={}] 保存设置 order={} multi_letter={} theme={} hotkey={}",
+        "[t={}] 保存设置 order={} multi_letter={} theme={} bg={} close_anim={} hotkey={}",
         windows::now_ms(),
         input.window_order,
         input.multi_letter,
         input.theme,
+        overlay_bg.as_str(),
+        input.close_anim,
         new_hotkey
     );
+    // 背景特效随保存落地（预览已应用时为幂等重设；防止预览漏发的兜底）
+    crate::apply_overlay_bg(&app, overlay_bg);
     Ok(())
 }

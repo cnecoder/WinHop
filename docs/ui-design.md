@@ -12,7 +12,8 @@
 
 | 变量 | 值 | 用途 |
 |---|---|---|
-| `--bg` | `#0b0c0f` | 覆盖层底色 |
+| `--bg` | `#0b0c0f` | 覆盖层底色（solid 模式）/ 派生透明底的基准 |
+| `--bg-rgb` | `11,12,15` | `--bg` 的 RGB，用于背景模式 `rgba(var(--bg-rgb), α)` |
 | `--surface` | `#12141a` | 面板/卡片表面（窗口列表、预览、弹窗） |
 | `--surface-2` | `#0d0f14` | 输入框底、黑名单行底（比 surface 略深） |
 | `--fg` | `#e8ebf1` | 正文文字（亮） |
@@ -20,10 +21,15 @@
 | `--off` | `#5b6475` | 更弱文字（空黑名单提示、置灰代号） |
 | `--line-rgb` | `255,255,255` | 中性描边/分隔线用白色透明度 `rgba(var(--line-rgb), α)` |
 | `--error` | `#ff6b6b` | 错误态（输入校验失败） |
+| `--shadow-panel` | `0 6px 24px rgba(0,0,0,.45)` | 窗口层列表面板、预览容器投影 |
+| `--shadow-float` | `0 10px 30px rgba(0,0,0,.5)` | 大预览浮层投影 |
+| `--shadow-dialog` | `0 16px 48px rgba(0,0,0,.55)` | 弹窗投影 |
 
 **圆角阶梯**：`--r-sm:4px`（徽章、缩略图）、`--r-control:6px`（按钮、输入框、代号徽章、设置项）、`--r-row:6px`（列表行）、`--r-panel:8px`（面板、大预览、弹窗）。
 
-**动效**：`--dur:140ms`，缓动 `--ease: cubic-bezier(0.16,1,0.3,1)`；只动 `transform/opacity/background/border-color` 等短时长属性。
+**动效**：`--dur:140ms`（微交互/呼出），`--dur-close:200ms`（全屏关闭淡出，比微交互长的时长才可感知），缓动 `--ease: cubic-bezier(0.16,1,0.3,1)`；只动 `transform/opacity/background/border-color` 等短时长属性。
+
+**背景模式**（`#app[data-bg]`，设置页「背景效果」二选一）：`solid`（默认）= 不透明 `var(--bg)`；`acrylic` = `rgba(var(--bg-rgb),0.45)` + Rust 窗口特效系统级模糊（色调放淡让模糊透出）。切换经 `set_overlay_bg` 命令即时生效，规则同主题：**只动背景这一处，面板/文字不变**。（曾有三档半透明 `translucent`，桌面透出显得杂乱，已移除。）
 
 **字体**（系统原生栈，不打包 webfont，中西文自动配对）：
 - 正文 `--font-sans: "Segoe UI","Microsoft YaHei",system-ui,sans-serif`
@@ -48,7 +54,7 @@
 | `--card-h` / `--card-gap` | 40px / 4px | 程序卡片行高、列间距 |
 | `--row-fs` / `--row-px` | 16px / 6px 12px | 程序行字号、行内边距 |
 | `--key-slot-w` / `--key-min-w` / `--key-fs` | 52px / 26px / 16px | 代号槽宽、徽章最小宽、徽章字号 |
-| `--wlist-w` / `--wrow-fs` / `--wpreview-pad` | 420px / 15px / 14px | 窗口层左列宽、窗口行字号、大预览内边距 |
+| `--wlist-w` / `--wrow-fs` / `--wpreview-pad` / `--wthumb-h` | JS 实测反推（1080p ≈ 236px）/ 15px / 16px / JS 实测反推（1080p ≈ 117px） | 窗口层左列宽（=16:9 缩略图宽 + 固定内距 28）、窗口行字号、大预览内边距、行缩略图固定高；由 `applyWindowsThumbSize()` 按行区可用高与实测行开销反推，**任意分辨率下 6 行恰好铺满**（CSS 内 108px 为首帧兜底） |
 
 - 派生值一律 `calc(<基准> * var(--ui-scale))`；新增覆盖层尺寸先加令牌再引用，**不要在 `#overlay-view` 内新写死 px**。
 - header、`#app` padding、设置页、帮助页不消费这些令牌，保持固定尺寸。
@@ -61,7 +67,7 @@
 - **accent 只表达「交互/选中/已配置运行」**：主按钮、输入框边框、选中高亮、代号徽章（已配置）、设置分组标题、模式徽章（多字母）。
 - **中性灰（`--dim`/`--off` + 白透明描边）表达「次要/不可达/未运行」**：说明文字、未运行程序、未配置代号占位、分隔线。
 - **红 `--error` 仅用于错误**：输入校验失败的红框。不再用红色做 hover（历史上「退出/屏蔽」hover 变红，已统一为 accent 实心）。
-- 选中/高亮用 **tint 填充 + `inset` 内描边**（`rgba(accent,0.12)` 底 + `inset 0 0 0 1px rgba(accent,0.45)`），不用外发光、不用硬 `outline`。
+- 选中/高亮用 **tint 填充 + `inset` 内描边，只套软件名称卡片 `.name`**（不框整行、不框代号）：选中 = `rgba(accent,0.12)` 底 + `inset 0 0 0 1px rgba(accent,0.45)`；悬停 = 白透明 `rgba(line,0.07)`。不用外发光、不用硬 `outline`。（曾试过整行高亮，但代号槽宽随代号长度可变、超长代号还向左溢出，整行块面参差有对齐问题，已回退名称段。）
 - 分隔线/弱描边统一 `rgba(var(--line-rgb), 0.08~0.25)`。
 
 ---
@@ -121,11 +127,12 @@ transition: background var(--dur) var(--ease);
 ### 3.5 列表行 / 卡片
 
 - 程序行 `.row`：flex、`align-items:center`、圆角 `--r-row`；字号基准 16px（`--row-fs`）、行高基准 40px（`--card-h`）、行间距基准 4px（`--card-gap`），均 × `--ui-scale`。
+- 应用图标 `.picon`：固定槽位（`calc(20px * var(--ui-scale))`，无图标时透明占位不跳版），位于代号槽与名称之间；图标由 Rust 提取、前端缓存（见 design.md「程序图标」）。
 - 程序层列表占满视口剩余高度 `calc(100vh - 124px)`；**每页 N 个卡片从上到下排列铺满行区**；实际程序不足 N 个时顶部对齐，不居中、不拉伸均分。
 - **自适应缩放（关键语义）**：设置项 `prog_page_size`（步进器偏好 8–64，默认 20）不直接决定行数，前端按屏幕高度反推可行区间 `pageSizeBounds`（`n_min=ceil(avail/(44·1.35))`、`n_max=floor(avail/(44·0.75))`，行区 avail = `#list` 高 − 工具条高 − padding-top；基准槽位 44 = 行 40 + gap 4），把偏好钳进区间得生效 N（`clampPageSize`），再 `cardScale=avail/(44n)`——故 scale 永不触顶/封底、卡片总高恰好铺满行区，不会「放到最大仍空半屏」。生效 N 经 `set_page_size` 下发 Rust 对齐分页（仅运行时）。设置页步进器 −/+ 的禁用边界就是该屏幕可行区间（不是固定 8–64，后者只是 sanity 绝对区间）；「重置」按钮回到 scale≈1 的本屏推荐行数。缩放只作用于 `#overlay-view`（程序层/窗口层），设置页、帮助页固定尺寸不受影响。
 - 选中/悬停高亮**只套软件名卡片 `.name`**（不框整行、不框代号）：选中 = accent tint + inset 描边；悬停 = 白透明 `rgba(line,0.07)`。
 - 未运行行 `.row.off`：代号/名称/屏数全部降为 `--off` 灰。
-- 窗口层：左侧 `.wlist`（基准 420px 宽 `--wlist-w`、surface 底、accent 描边面板）+ 右侧 `.wpreview` 大预览（padding `--wpreview-pad`）；窗口行 `.wrow` 字号 `--wrow-fs`，选中同 accent tint 规则。两层共用同一 `--ui-scale`，进出窗口层不跳动。
+- 窗口层：左侧 `.wlist`（宽 `--wlist-w` = 16:9 缩略图宽 + 固定内距 28、surface 底、accent 描边面板，**隐藏滚动条**——超出 6 行的窗口用滚轮/键盘滚动，数字键选中自动滚入）+ 右侧 `.wpreview` 大预览（padding `--wpreview-pad`）；窗口行 `.wrow` 字号 `--wrow-fs`，行缩略图 `.wthumb` 16:9、高 `--wthumb-h`（JS 反推恰 6 行；DWM 纹理 contain 居中填充，行标题单行省略）；选中 = 整行 accent tint + inset 描边 + **数字徽章实心 accent**（三层信号）。**实时预览与行缩略图不加描边/ring**——DWM 纹理 contain 边缘与 ring 存在独立像素对齐差，会被纹理部分盖住且位置随窗口宽高比变化；源窗口自身 1px 亮边框由 Rust 侧源矩形内缩裁除；只用柔和投影与 surface-2 底区分。两层共用同一 `--ui-scale`，进出窗口层不跳动。
 
 ### 3.6 分组与文字层级
 
@@ -136,8 +143,10 @@ transition: background var(--dur) var(--ease);
 ### 3.7 动效
 
 - 进场 `overlay-in`（淡入 + 4px 上移）、弹窗 `pop-in`（淡入 + 0.97 缩放）。
+- 呼出首帧：程序行 `row-in` 逐行级联（行内联 `--i` × 12ms，封顶 6 档；仅 `#list.enter` 作用域，即「从关闭态来的首次渲染」，键入筛选/翻页重建不重播）；程序层→窗口层切换时 `.wlist`/`.wpreview` `fade-in` 仅 opacity 淡入（`#list.panel-enter` 作用域）——**窗口层禁用 transform 动画**（会让 `getBoundingClientRect` 与 DWM 缩略图落点错位，缩略图布局相应推迟到动画后）。
+- 关闭淡出：`#app.closing` opacity 过渡（`--dur-close` 200ms，仅退出类关闭——Esc/点击外部等；切换类关闭一律瞬时，激活在淡出动画结束回执后执行）。
 - 所有 transition 用 `--dur`/`--ease`；筛选光标 `.caret` 用 1s steps(2) 闪烁。
-- `@media (prefers-reduced-motion: reduce)` 下全部动画/过渡降为 0.01ms、光标停闪——新增动效必须被该媒体查询覆盖。
+- `@media (prefers-reduced-motion: reduce)` 下全部动画/过渡降为 0.01ms、光标停闪——新增动效必须被该媒体查询覆盖（现有规则是 `*` 通配，天然覆盖；JS 侧淡出计时另有 matchMedia 跳过）。
 
 ---
 

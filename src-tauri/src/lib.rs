@@ -5,14 +5,17 @@ mod windows;
 
 use std::collections::HashMap;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine as _;
 use config::{Config, Program, WinDigitMode, WindowOrder};
 use serde::Serialize;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::window::EffectsBuilder;
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, WindowEvent};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 use windows::{HookMsg, WinInfo};
@@ -104,7 +107,15 @@ struct Inner {
     visible: Arc<AtomicBool>,
     overlay: Mutex<OverlayState>,
     prev_fg: AtomicIsize,
+    /// 淡出关闭挂起的激活目标（close_anim 路径：前端动画完成后由 overlay_hidden 取用）
+    hide_target: AtomicIsize,
+    /// 淡出关闭发起时间戳（0=无挂起）；overlay_hidden 与看门狗超时兜底都按它判定
+    hide_pending_since: AtomicU64,
 }
+
+/// 退出类关闭淡出时长：无人在等，柔和且可感知（切换类一律瞬时——用户在等目标窗口，
+/// 实测 100ms 淡出仍被感知为迟钝，进一步调小与瞬切无异，故直接瞬时）
+const CLOSE_ANIM_MS_DISMISS: u32 = 200;
 
 #[derive(Serialize, Clone)]
 struct ProgramUi {
@@ -145,11 +156,13 @@ struct Render {
     page_count: usize,
     /// 多字母模式窗口层：已输入的窗口索引（数字串），用于提示；Enter 确认
     win_digit: String,
+    /// 关闭淡出时长（ms）：0=瞬时；切换类用 CLOSE_ANIM_MS_SWITCH、退出类用 CLOSE_ANIM_MS_DISMISS
+    anim_close_ms: u32,
 }
 
 impl Render {
     // 覆盖层关闭时下发的空渲染（visible=false，列表清空）
-    fn closed(cfg: &Config) -> Render {
+    fn closed(cfg: &Config, anim_close_ms: u32) -> Render {
         Render {
             visible: false,
             phase: "programs".into(),
@@ -165,6 +178,7 @@ impl Render {
             page: 1,
             page_count: 1,
             win_digit: String::new(),
+            anim_close_ms,
         }
     }
 }
@@ -638,6 +652,7 @@ fn emit(app: &AppHandle, inner: &Inner, ov: &OverlayState) {
         page: page + 1,
         page_count,
         win_digit: String::new(),
+        anim_close_ms: 0,
     };
     if ov.phase == Phase::Windows {
         render.phase = "windows".into();
@@ -778,6 +793,125 @@ fn group_windows(cfg: &Config) -> HashMap<String, Vec<WinInfo>> {
     wins_by_proc
 }
 
+// 程序图标缓存：process → "宽:高:base64(RGBA)"。进程内常驻（进程多开窗口共用一个
+// 图标）；提取失败缓存空串（不再重试，避免每次呼出重复读盘）。PWA 的 process 键是
+// pwa#<id>，对应窗口 path 为宿主浏览器 exe → 自然取到宿主浏览器图标。
+// Option 包一层：HashMap::new 非 const，static 装配沿用 windows::THUMBS 同款模式
+static ICONS: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
+
+// 后台提取呼出列表里缺图标的进程：SHGetFileInfoW 逐个可能命中磁盘（几十 ms 级），
+// 不能阻塞呼出路径——在独立线程跑，完成后以独立 icons 事件补发新增项（前端合并缓存，
+// 不放进每次按键都重发的 overlay 渲染事件里）。
+// 路径为空的条目（未运行的配置程序）先查注册表 App Paths 兜底；提取成功后把观测到
+// 的路径学习进配置（原子落盘），下次未运行时直接可用。
+fn extract_icons_async(app: AppHandle, want: Vec<(String, String)>) {
+    let inner = app.state::<Inner>();
+    let mut learned: Vec<(String, String)> = Vec::new();
+    let mut fresh: HashMap<String, String> = HashMap::new();
+    for (proc, path) in want {
+        // 未运行且无记录路径：依次查注册表 App Paths → 开始菜单 .lnk 索引
+        let resolved = if path.is_empty() {
+            match windows::app_paths_lookup(&proc)
+                .or_else(|| {
+                    if proc.starts_with(windows::PWA_PROC_PREFIX) {
+                        None // PWA 无独立 exe，跳过快捷方式匹配
+                    } else {
+                        windows::lnk_lookup(&proc)
+                    }
+                }) {
+                Some(p) => {
+                    learned.push((proc.clone(), p.clone()));
+                    p
+                }
+                None => {
+                    let mut icons = ICONS.lock().unwrap();
+                    icons
+                        .get_or_insert_with(Default::default)
+                        .insert(proc, String::new());
+                    continue;
+                }
+            }
+        } else {
+            path
+        };
+        let payload = match windows::extract_icon_rgba(&resolved) {
+            Some((w, h, rgba)) => {
+                let b64 = BASE64.encode(&rgba);
+                format!("{}:{}:{}", w, h, b64)
+            }
+            None => String::new(), // 负缓存：提取失败不再重试
+        };
+        let mut icons = ICONS.lock().unwrap();
+        let icons = icons.get_or_insert_with(Default::default);
+        icons.insert(proc.clone(), payload.clone());
+        if !payload.is_empty() {
+            fresh.insert(proc.clone(), payload);
+        }
+        // 路径学习：记录观测到的 exe 完整路径（配置已有且相同则不动）
+        learned.push((proc, resolved));
+    }
+    // 配置路径学习落盘（仅变化条目；原子保存）
+    if !learned.is_empty() {
+        let mut changed = false;
+        {
+            let mut cfg = inner.cfg.lock().unwrap();
+            for (proc, path) in &learned {
+                if let Some(p) = cfg.programs.iter_mut().find(|p| p.process == *proc) {
+                    if p.path != *path {
+                        p.path = path.clone();
+                        changed = true;
+                    }
+                }
+            }
+            if changed {
+                if let Err(e) = config::save(&cfg, &inner.cfg_path) {
+                    eprintln!("[winhop] 学习的程序路径落盘失败: {}", e);
+                    changed = false;
+                }
+            }
+        }
+        if changed {
+            eprintln!("[t={}] 已学习 {} 条程序 exe 路径", windows::now_ms(), learned.len());
+        }
+    }
+    if !fresh.is_empty() {
+        let _ = app.emit("icons", &fresh);
+    }
+}
+
+// 应用覆盖层背景效果（启动装配与设置页实时预览共用）。
+// acrylic：Tauri 窗口特效（Win10 1809+ 走 SetWindowCompositionAttribute
+// ACCENT_ENABLE_ACRYLICBLURBEHIND，Win11 走 DWMWA_SYSTEMBACKDROP_TYPE），
+// 色调由前端 CSS 叠加（半透明暗色），使系统模糊透出；
+// 其余模式清空特效，视觉效果全部由前端 CSS 承担。
+fn apply_overlay_bg(app: &AppHandle, bg: config::OverlayBg) {
+    let Some(win) = app.get_webview_window("main") else {
+        return;
+    };
+    let res = match bg {
+        config::OverlayBg::Acrylic => win.set_effects(
+            EffectsBuilder::new()
+                .effect(tauri::window::Effect::Acrylic)
+                .build(),
+        ),
+        _ => win.set_effects(None),
+    };
+    if let Err(e) = res {
+        eprintln!("[winhop] 应用背景效果 {:?} 失败: {}", bg, e);
+    }
+}
+
+// 设置页实时预览背景效果（不写盘；保存由 save_settings 持久化，放弃由前端回退重设）
+#[tauri::command]
+fn set_overlay_bg(app: AppHandle, mode: String) -> Result<(), String> {
+    let bg = config::OverlayBg::parse(&mode);
+    if bg.as_str() != mode {
+        return Err(format!("无效的背景效果「{}」", mode));
+    }
+    apply_overlay_bg(&app, bg);
+    Ok(())
+}
+
 fn open(app: &AppHandle) {
     let inner = app.state::<Inner>();
     if inner.visible.load(Ordering::Relaxed) {
@@ -811,11 +945,47 @@ fn open(app: &AppHandle) {
             .insert(fg, windows::now_ms());
     }
     inner.visible.store(true, Ordering::Relaxed);
+    // 快速重呼：清掉上一轮可能的淡出挂起状态（前端收到 visible=true 会取消淡出、不发回执）
+    inner.hide_target.store(0, Ordering::Relaxed);
+    inner.hide_pending_since.store(0, Ordering::Relaxed);
     eprintln!(
         "[t={}] overlay open ({} programs)",
         windows::now_ms(),
         ov.prog_list.len()
     );
+    // 图标：对缓存缺失的程序收集提取清单——运行中的取窗口枚举到的 exe 路径；
+    // 未运行的配置程序依次回退配置记录的路径（运行时自动学习）与注册表 App Paths
+    // 查询（在后台线程做，不阻塞呼出）。PWA 键对应宿主浏览器 exe 路径
+    let mut want: Vec<(String, String)> = Vec::new();
+    {
+        let cfg = inner.cfg.lock().unwrap();
+        let mut icons = ICONS.lock().unwrap();
+        let icons = icons.get_or_insert_with(Default::default);
+        for p in &ov.prog_list {
+            if icons.contains_key(&p.process) {
+                continue;
+            }
+            if let Some(ws) = ov.wins_by_proc.get(&p.process) {
+                if let Some(w) = ws.iter().find(|w| !w.path.is_empty()) {
+                    want.push((p.process.clone(), w.path.clone()));
+                    continue;
+                }
+            }
+            // 未运行：配置记录过路径 → 直接用；没记录过 → 交给后台线程查 App Paths
+            let known = cfg
+                .programs
+                .iter()
+                .find(|c| c.process == p.process)
+                .and_then(|c| {
+                    if c.path.is_empty() {
+                        None
+                    } else {
+                        Some(c.path.clone())
+                    }
+                });
+            want.push((p.process.clone(), known.unwrap_or_default()));
+        }
+    }
     if let Some(win) = app.get_webview_window("main") {
         if let Ok(Some(mon)) = win.primary_monitor() {
             let pos = mon.position();
@@ -847,6 +1017,11 @@ fn open(app: &AppHandle) {
         }
     }
     emit(app, &inner, &ov);
+    // 呼出路径已收尾，图标提取放后台线程（不阻塞下次按键与渲染）
+    if !want.is_empty() {
+        let handle = app.clone();
+        std::thread::spawn(move || extract_icons_async(handle, want));
+    }
 }
 
 fn close(app: &AppHandle) {
@@ -877,11 +1052,7 @@ fn close_impl(app: &AppHandle, restore_prev: bool) {
     drop(ov);
     windows::set_overlay_hwnd(0);
     windows::thumb_clear();
-    // 先隐藏再处理尺寸：若先退全屏，面板会在屏幕上可见地缩小跳动（闪烁）
-    if let Some(win) = app.get_webview_window("main") {
-        let _ = win.hide();
-    }
-    // 决定要激活的目标窗口（先记下来，spawn 放到 emit 之后）。
+    // 决定要激活的目标窗口（先记下来，spawn 放到 emit 收尾之后）。
     // pending（用户明确选了窗口）总是优先；否则仅 restore_prev 路径回退 prev_fg
     let target = if pending != 0 {
         pending
@@ -890,17 +1061,75 @@ fn close_impl(app: &AppHandle, restore_prev: bool) {
     } else {
         0
     };
+    // close_anim 开启 → 淡出仅用于退出类关闭（Esc 空筛选/点击外部/再按热键/托盘，
+    // 无人在等）→ 200ms 柔和淡出。切换类（pending!=0，Space/数字/回车/跳转）一律
+    // 瞬时：用户在等目标窗口弹出，实测任何可感知的淡出都显得迟钝。
+    // 淡出的激活统一推迟到动画结束回执后（淡出期提前激活会让覆盖层「可见但失焦」
+    // 析出伪影）；焦点丢失路径（restore_prev=false，用户已 Alt+Tab 切走）一律瞬时。
+    // close_anim 关闭 → 全部走下方瞬时路径（历史行为）。
+    let anim_ms = {
+        let cfg = inner.cfg.lock().unwrap();
+        if !cfg.close_anim || !restore_prev || pending != 0 {
+            0
+        } else {
+            CLOSE_ANIM_MS_DISMISS
+        }
+    };
+    let cfg = inner.cfg.lock().unwrap();
+    let render = Render::closed(&cfg, anim_ms);
+    drop(cfg);
+    if anim_ms > 0 {
+        // 挂起收尾状态：hide_target 由 overlay_hidden 取用（hide + 激活）；
+        // 淡出期间焦点被外部抢走（Focused(false)）会立即隐藏并清掉挂起状态，
+        // 见 on_window_event
+        inner.hide_target.store(target, Ordering::Relaxed);
+        inner.hide_pending_since.store(windows::now_ms(), Ordering::Relaxed);
+        let _ = app.emit("overlay", &render);
+        return;
+    }
+    inner.hide_target.store(0, Ordering::Relaxed);
+    inner.hide_pending_since.store(0, Ordering::Relaxed);
+    // 先隐藏再处理尺寸：若先退全屏，面板会在屏幕上可见地缩小跳动（闪烁）
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.hide();
+    }
     // 先完成覆盖层收尾（emit visible=false），再启动激活线程。
     // 关键顺序：emit 会向刚 hide 的 WebView2 发 IPC，必须在外部 SetForegroundWindow
     // 抢焦点之前完成。若后台线程先抢走焦点，WebView2 在处理 hide+IPC 时会阻塞主线程，
     // 连带挂住鼠标 LL 钩子（光标卡顿）和 WM_HOTKEY 派发（热键唤不起）——这是竞态，
     // 不能靠 sleep/日志延迟掩盖，必须用顺序保证。
-    let cfg = inner.cfg.lock().unwrap();
-    let render = Render::closed(&cfg);
-    drop(cfg);
     let _ = app.emit("overlay", &render);
     // 收尾完成，再在独立线程激活目标（AttachThreadInput 已移除，激活不阻塞主线程；
     // 独立线程保险，任何目标窗口的慢响应都不影响钩子/热键）。
+    if target != 0 {
+        std::thread::spawn(move || {
+            windows::activate_with_retry(target);
+        });
+    }
+}
+
+// 淡出动画收尾回执：前端播完关闭淡出后调用，hide + 激活挂起目标——激活发生在
+// emit(visible=false) 与 hide 之后（时序红线以构造顺序保持，且淡出全程窗口保持焦点，
+// 不产生「可见但已失焦」的伪影状态）。visible 已变 true（淡出期间用户重呼）则忽略。
+#[tauri::command]
+fn overlay_hidden(app: AppHandle) {
+    let inner = app.state::<Inner>();
+    if inner.visible.load(Ordering::Relaxed) {
+        return;
+    }
+    let since = inner.hide_pending_since.swap(0, Ordering::Relaxed);
+    if since == 0 {
+        return; // 无挂起的淡出收尾（重复回执/看门狗已兜底）
+    }
+    let target = inner.hide_target.swap(0, Ordering::Relaxed);
+    eprintln!(
+        "[t={}] overlay 淡出收尾 target={:#x}",
+        windows::now_ms(),
+        target
+    );
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.hide();
+    }
     if target != 0 {
         std::thread::spawn(move || {
             windows::activate_with_retry(target);
@@ -1081,6 +1310,7 @@ fn apply_program_edit(
             multi_key: if multi { key.to_string() } else { String::new() },
             name: name.to_string(),
             process: process.to_string(),
+            path: String::new(),
         });
     }
     Ok(())
@@ -1357,7 +1587,9 @@ pub fn run() {
             unblock_program,
             refresh_overlay,
             pick_program,
-            set_page_size
+            set_page_size,
+            set_overlay_bg,
+            overlay_hidden
         ])
         .setup(move |app| {
             let visible = Arc::new(AtomicBool::new(false));
@@ -1368,7 +1600,12 @@ pub fn run() {
                 visible: visible.clone(),
                 overlay: Mutex::new(OverlayState::default()),
                 prev_fg: AtomicIsize::new(0),
+                hide_target: AtomicIsize::new(0),
+                hide_pending_since: AtomicU64::new(0),
             });
+            // 启动即应用配置的背景效果（acrylic 特效作用于窗口，须在窗口创建后设一次）
+            let init_bg = app.state::<Inner>().cfg.lock().unwrap().overlay_bg;
+            apply_overlay_bg(app.handle(), init_bg);
             let handle = app.handle().clone();
             // 鼠标钩子（点击外部关闭）；键盘走 RegisterHotKey + webview JS keydown
             windows::install_mouse_hook(visible, Box::new(move |msg| handle_key(&handle, msg)));
@@ -1396,6 +1633,25 @@ pub fn run() {
                         last_fg = fg;
                     }
                     if !inner.visible.load(Ordering::Relaxed) {
+                        // 淡出路径兜底：visible=false 但窗口仍可见（前端未回执
+                        // overlay_hidden，webview 挂死等）超时 → 强制 hide+激活，
+                        // 避免覆盖层永远浮在最上层
+                        let since = inner.hide_pending_since.load(Ordering::Relaxed);
+                        if since != 0 && windows::now_ms().saturating_sub(since) > 1500 {
+                            let target = inner.hide_target.swap(0, Ordering::Relaxed);
+                            inner.hide_pending_since.store(0, Ordering::Relaxed);
+                            eprintln!(
+                                "[t={}] 淡出回执超时，强制收尾 target={:#x}",
+                                windows::now_ms(),
+                                target
+                            );
+                            if let Some(win) = health_handle.get_webview_window("main") {
+                                let _ = win.hide();
+                            }
+                            if target != 0 {
+                                std::thread::spawn(move || windows::activate_with_retry(target));
+                            }
+                        }
                         continue;
                     }
                     let hwnd = windows::get_overlay_hwnd();
@@ -1445,6 +1701,16 @@ pub fn run() {
                 let app = window.app_handle();
                 let inner = app.state::<Inner>();
                 if !inner.visible.load(Ordering::Relaxed) {
+                    // 淡出期间焦点被外部抢走（用户 Alt+Tab 切走）：立即隐藏并清掉挂起
+                    // 状态——全屏窗口绝不能滞留在「可见但已失焦」状态（关淡出伪影根源），
+                    // 且用户已主动切走，挂起的激活目标作废
+                    if inner.hide_pending_since.load(Ordering::Relaxed) != 0 {
+                        inner.hide_target.store(0, Ordering::Relaxed);
+                        inner.hide_pending_since.store(0, Ordering::Relaxed);
+                        if let Some(win) = app.get_webview_window("main") {
+                            let _ = win.hide();
+                        }
+                    }
                     return;
                 }
                 let ov = inner.overlay.lock().unwrap();
@@ -1494,6 +1760,7 @@ mod state_machine_tests {
             multi_key: mk.into(),
             name: name.into(),
             process: proc_.into(),
+            path: String::new(),
         }
     }
 

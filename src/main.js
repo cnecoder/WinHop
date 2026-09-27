@@ -40,6 +40,23 @@ let langOverride = null; // 语言手动覆盖（null=跟随系统），保存�
 let langChoice = "system"; // 设置页语言单选当前值（system/zh-CN/en）
 let sysLang = "zh-CN"; // 后端检测到的系统语言
 
+// 背景效果（solid/acrylic）：CSS 按 #app[data-bg] 切换，acrylic 另由
+// Rust 窗口特效落地；改动即时 invoke（预览），放弃时回退重设
+let currentBg = "solid";
+
+// 程序图标缓存：process → dataURL（Rust 随 icons 事件下发裸像素，此处一次性转 PNG）
+const iconCache = new Map();
+// 无图标占位：1×1 全透明像素，保持行布局稳定不跳版
+const EMPTY_PX =
+  "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+
+// 退出淡出：.closing 触发 CSS opacity 过渡，完成后回执 overlay_hidden 让 Rust
+// hide+激活；期间收到 visible=true（快速重呼）即取消
+let closeTimer = null;
+// 上一次渲染的覆盖层阶段（null=尚未渲染或刚关闭）：用于识别「重新呼出首帧」
+// 播放入场动画，键入筛选等后续重建不重播
+let lastPhase = null;
+
 // 应用语言到 UI（不重开设置页，避免与关闭时序竞态）：
 // choice 为 system/zh-CN/en；setLang + 静态文案 + 覆盖层重绘（settingsOpen 时 render 会被挡，调用方保证顺序）
 function applyLanguage(choice) {
@@ -58,12 +75,55 @@ function applyTheme(id) {
   document.documentElement.dataset.theme = id || "black-green";
 }
 
+// 应用背景效果：CSS 切 #app[data-bg]；Rust 侧同步窗口特效（acrylic 应用/其余清除）
+function applyBg(mode) {
+  currentBg = mode === "acrylic" ? "acrylic" : "solid";
+  appEl.dataset.bg = currentBg;
+  invoke("set_overlay_bg", { mode: currentBg }).catch(() => {});
+}
+
+// 图标载荷 "宽:高:base64(RGBA)" → PNG dataURL（每进程一次，canvas 落地）
+function iconDataUrl(payload) {
+  if (!payload) return null;
+  const i = payload.indexOf(":");
+  const j = payload.indexOf(":", i + 1);
+  if (i < 0 || j < 0) return null;
+  const w = Number(payload.slice(0, i));
+  const h = Number(payload.slice(i + 1, j));
+  const b64 = payload.slice(j + 1);
+  if (!w || !h || !b64) return null;
+  try {
+    const raw = atob(b64);
+    const px = new Uint8ClampedArray(raw.length);
+    for (let n = 0; n < raw.length; n++) px[n] = raw.charCodeAt(n);
+    const cv = document.createElement("canvas");
+    cv.width = w;
+    cv.height = h;
+    cv.getContext("2d").putImageData(new ImageData(px, w, h), 0, 0);
+    return cv.toDataURL("image/png");
+  } catch {
+    return null;
+  }
+}
+
+// 取消退出淡出（快速重呼/重复关闭事件）：清计时器、类与内联时长，不回执
+function cancelCloseAnim() {
+  if (closeTimer) {
+    clearTimeout(closeTimer);
+    closeTimer = null;
+  }
+  appEl.classList.remove("closing");
+  appEl.style.transitionDuration = "";
+}
+
 // 读取设置页表单当前值
 function readSettingsForm() {
   const order = document.querySelector('input[name="order"]:checked');
   const theme = document.querySelector('input[name="theme"]:checked');
   const mode = document.querySelector('input[name="mode"]:checked');
   const wdm = document.querySelector('input[name="win-digit-mode"]:checked');
+  const bg = document.querySelector('input[name="overlay-bg"]:checked');
+  const ca = document.querySelector('input[name="close-anim"]:checked');
   return {
     hotkey: formHotkey,
     autostart: document.getElementById("autostart-check").checked,
@@ -71,6 +131,8 @@ function readSettingsForm() {
     multi_letter: (mode ? mode.value : "single") === "multi",
     theme: theme ? theme.value : "black-green",
     win_digit_mode: wdm ? wdm.value : "jump",
+    overlay_bg: bg ? bg.value : "solid",
+    close_anim: ca ? ca.value === "fade" : true,
     prog_page_size:
       Number(document.getElementById("pagesize-value").textContent) ||
       PROG_PAGE_SIZE_DEFAULT,
@@ -106,6 +168,8 @@ async function openSettings() {
     multi_letter: info.multi_letter,
     theme: info.theme,
     win_digit_mode: info.win_digit_mode || "jump",
+    overlay_bg: info.overlay_bg === "acrylic" ? "acrylic" : "solid",
+    close_anim: info.close_anim !== false,
     prog_page_size: info.prog_page_size || PROG_PAGE_SIZE_DEFAULT,
     // 保存的语言选择：跟随系统=system，否则具体语言
     lang: info.lang_cfg || "system",
@@ -176,6 +240,20 @@ async function openSettings() {
     });
   });
   applyTheme(info.theme);
+  // 背景效果/关闭动画：点选即预览（背景立即生效并可回退；关闭动画保存时才读值）
+  const bgVal = info.overlay_bg === "acrylic" ? "acrylic" : "solid";
+  document.querySelectorAll('input[name="overlay-bg"]').forEach((r) => {
+    r.checked = r.value === bgVal;
+    r.addEventListener("change", () => {
+      applyBg(r.value);
+      updateSettingsState();
+    });
+  });
+  const caVal = info.close_anim === false ? "instant" : "fade";
+  document.querySelectorAll('input[name="close-anim"]').forEach((r) => {
+    r.checked = r.value === caVal;
+    r.addEventListener("change", updateSettingsState);
+  });
   renderBlocked(info.blocked || []);
   document.getElementById("version-info").textContent = t("version", { v: info.version });
   const e = info.changelog;
@@ -555,8 +633,11 @@ document.getElementById("confirm-save").addEventListener("click", async () => {
 });
 document.getElementById("confirm-discard").addEventListener("click", () => {
   confirmMask.hidden = true;
-  // 丢弃未保存的主题预览，回退到已保存主题
-  if (settingsLoaded) applyTheme(settingsLoaded.theme);
+  // 丢弃未保存的主题/背景预览，回退到已保存值
+  if (settingsLoaded) {
+    applyTheme(settingsLoaded.theme);
+    applyBg(settingsLoaded.overlay_bg);
+  }
   discardSettings(); // 不保存：恢复旧热键
 });
 document.getElementById("confirm-cancel").addEventListener("click", () => {
@@ -785,17 +866,47 @@ function applyUiScale() {
   }
 }
 
-// render 后统一重排：先写缩放变量，下一帧（新尺寸生效后）再测量缩略图/滚动选中行进区
+// render 后统一重排：先写缩放变量，下一帧（新尺寸生效后）再测量缩略图/滚动选中行进区。
+// deferThumbs=true（窗口层刚入场播淡入时）缩略图落位推迟到动画后——DWM 合成层不参与
+// CSS 动画，提前落位会在半透明面板上先于内容出现
 let layoutRaf = 0;
-function scheduleOverlayLayout() {
+function scheduleOverlayLayout(deferThumbs) {
   applyUiScale();
   if (layoutRaf) return;
   layoutRaf = requestAnimationFrame(() => {
     layoutRaf = 0;
+    applyWindowsThumbSize(); // 先定窗口层缩略图尺寸（改变行高），再滚动/落位
     scrollActiveIntoView();
-    layoutThumbs();
-    updatePreview();
+    if (deferThumbs) {
+      setTimeout(() => {
+        layoutThumbs();
+        updatePreview();
+      }, 160);
+    } else {
+      layoutThumbs();
+      updatePreview();
+    }
   });
+}
+
+// 窗口层缩略图精确六行：渲染后实测行内非缩略图开销（标题行+内距）与行区可用高，
+// 反推 16:9 缩略图高（1080p ≈ 117px），同步推导左列宽（=缩略图宽+固定内距 28）。
+// 任何分辨率/缩放下 6 行都恰好铺满、第 7 行不露头，替代静态估算。
+function applyWindowsThumbSize() {
+  if (!state || state.phase !== "windows") return;
+  const list = listEl.querySelector(".wlist");
+  const row = list && list.querySelector(".wrow");
+  const thumb = row && row.querySelector(".wthumb");
+  if (!list || !row || !thumb) return;
+  const listStyle = getComputedStyle(listEl);
+  const availH =
+    listEl.clientHeight - (parseFloat(listStyle.paddingTop) || 0);
+  const innerH = availH - 14; // 减 .wlist 上下 padding 12 + border 2
+  const chrome = row.offsetHeight - thumb.offsetHeight; // 标题行 + 行内距 + 行内间距
+  const h = Math.floor((innerH - 5 * 3) / 6 - chrome); // 6 行 + 5 个 3px 列表间隙
+  if (h < 40) return; // 极端小屏保护
+  overlayView.style.setProperty("--wthumb-h", h + "px");
+  overlayView.style.setProperty("--wlist-w", Math.round((h * 16) / 9) + 28 + "px");
 }
 
 // 元素物理 rect + 与滚动容器的可视裁剪 rect（ax/ay/aw/ah 为 0 表示不裁剪）
@@ -888,7 +999,8 @@ function render(s) {
   // 主题以后端配置为准（保存后/启动时同步）
   if (s.theme) applyTheme(s.theme);
   if (!s.visible) {
-    appEl.style.display = "none";
+    const animMs = s.anim_close_ms || 0;
+    cancelCloseAnim();
     if (hkListening) endHotkeyCapture(); // 录制中：停检测
     if (settingsOpen) resumeHotkey(); // 覆盖层关闭带走设置页：恢复 suspend 的热键
     settingsOpen = false;
@@ -897,11 +1009,40 @@ function render(s) {
     helpView.hidden = true;
     overlayView.hidden = false;
     confirmMask.hidden = true;
+    lastPhase = null; // 下次渲染即「重新呼出」首帧
+    if (animMs > 0) {
+      // 关闭淡出（切换类 100ms / 退出类 200ms，后端下发时长）：窗口此时仍由 Rust
+      // 保持显示且保持焦点（激活推迟到动画结束后，避免「可见但已失焦」的全屏窗口
+      // 析出伪影），动画完成后回执 overlay_hidden 让 Rust hide+激活目标。
+      // 若期间收到 visible=true（快速重呼）会被取消。
+      const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      if (reduced) {
+        appEl.style.display = "none";
+        invoke("overlay_hidden").catch(() => {});
+        return;
+      }
+      appEl.style.transitionDuration = animMs + "ms";
+      appEl.classList.add("closing");
+      closeTimer = setTimeout(() => {
+        closeTimer = null;
+        appEl.classList.remove("closing");
+        appEl.style.transitionDuration = "";
+        appEl.style.display = "none";
+        invoke("overlay_hidden").catch(() => {});
+      }, animMs + 30);
+    } else {
+      appEl.style.display = "none";
+    }
     return;
   }
+  cancelCloseAnim(); // 快速重呼：取消进行中的退出淡出
   appEl.style.display = "block";
   // 设置页/帮助页打开时不刷新覆盖层（它们被隐藏）；关闭后由新事件覆盖
   if (settingsOpen || helpOpen) return;
+  // freshOpen=从关闭态来的首次渲染（播入场动画）；phaseChanged=程序层↔窗口层切换
+  const freshOpen = lastPhase === null;
+  const phaseChanged = lastPhase !== s.phase;
+  lastPhase = s.phase;
   renderHeader(s);
   if (s.phase === "windows") {
     titleEl.textContent = winHint(s);
@@ -916,6 +1057,9 @@ function render(s) {
     } else {
       lastWinKey = winKey;
       listEl.className = "window-layer";
+      // 入场淡入只播一次（层级切换时），且仅 opacity——transform 会让动画期的
+      // getBoundingClientRect 与 DWM 缩略图落点错位
+      if (phaseChanged) listEl.classList.add("panel-enter");
       listEl.innerHTML =
         `<div class="wlist">` +
         s.windows
@@ -927,19 +1071,23 @@ function render(s) {
               `<span class="name">${escapeHtml(w.title)}</span>` +
               `<span class="screen">${t("screen", { n: w.screen + 1 })}</span>` +
               `</div>` +
-              `<img class="wthumb" alt="" />` +
+              // 锚点用 div 不用 img：DWM 纹理直接合成到其矩形上，img 的合成层
+              // 会在边缘露出 1px 白缝
+              `<div class="wthumb"></div>` +
               `</div>`
           )
           .join("") +
         `</div>` +
-        `<div class="wpreview"><img id="preview-img" alt="" /></div>`;
-      scheduleOverlayLayout();
+        `<div class="wpreview"><div id="preview-img"></div></div>`;
+      scheduleOverlayLayout(phaseChanged);
     }
   } else {
     lastWinKey = null;
     previewTarget = null;
     invoke("thumb_clear");
     listEl.className = "";
+    // 行入场级联仅播「重新呼出」首帧；键入筛选/翻页等后续重建不重播
+    if (freshOpen) listEl.classList.add("enter");
     titleEl.textContent = "WinHop";
     // 多字母筛选无匹配：显示空状态提示，且不显示翻页
     const noMatch = s.multi_letter && s.filter && s.programs.length === 0;
@@ -964,7 +1112,7 @@ function render(s) {
       emptyHint +
       s.programs
         .map(
-          (p) => {
+          (p, i) => {
             const hasKey = p.key && p.key.length > 0;
             // 有字母：运行中=高亮 key-cfg，未运行=置灰 key-off；无字母=占位 key-empty
             const keyCls = !hasKey
@@ -977,9 +1125,13 @@ function render(s) {
             const procLabel = p.process.startsWith(PWA_PROC_PREFIX)
               ? "PWA"
               : p.process;
+            // 应用图标：有缓存用缓存，否则透明占位（icons 事件晚到时回填）
+            const icon = iconCache.get(p.process) || EMPTY_PX;
+            // --i 供行入场级联取延迟（封顶 6 档，整页入场 ≤72ms+行时长）
             return (
-              `<div class="row${p.active ? " active" : ""}${p.running ? "" : " off"}" data-key="${escapeHtml(p.key)}" data-process="${escapeHtml(p.process)}">` +
+              `<div class="row${p.active ? " active" : ""}${p.running ? "" : " off"}" data-key="${escapeHtml(p.key)}" data-process="${escapeHtml(p.process)}" style="--i:${Math.min(i, 6)}">` +
               `<span class="key-slot"><span class="${keyCls}${wide}">${hasKey ? escapeHtml(p.key) : "·"}</span></span>` +
+              `<img class="picon" alt="" data-process="${escapeHtml(p.process)}" src="${icon}" />` +
               `<span class="name">${escapeHtml(p.name)} (${escapeHtml(procLabel)})</span>` +
               `<span class="screen">${p.running ? "×" + p.count : t("notRunning")}</span>` +
               `<button class="edit-btn" title="${t("edit")}">✎</button>` +
@@ -992,7 +1144,7 @@ function render(s) {
   }
 }
 
-// 启动：按系统/已保存的语言设定界面语言
+// 启动：按系统/已保存的语言设定界面语言；背景效果按配置应用
 invoke("get_settings")
   .then((info) => {
     // lang_cfg：配置保存的语言（空=跟随系统）；lang_sys：系统检测（与用户设置无关）
@@ -1000,10 +1152,23 @@ invoke("get_settings")
     currentHotkey = info.hotkey || "ctrl+space";
     const saved = info.lang_cfg || ""; // 空 = 跟随系统
     applyLanguage(saved || "system");
+    applyBg(info.overlay_bg || "translucent");
   })
   .catch(() => applyLanguage("system"));
 
 listen("overlay", (e) => render(e.payload));
+
+// 图标：Rust 后台提取完成后补发（首呼出晚于首次渲染），合并缓存并回填已渲染行
+listen("icons", (e) => {
+  for (const [proc, payload] of Object.entries(e.payload || {})) {
+    const url = iconDataUrl(payload);
+    if (url) iconCache.set(proc, url);
+  }
+  document.querySelectorAll("#list img.picon[data-process]").forEach((img) => {
+    const url = iconCache.get(img.dataset.process);
+    if (url) img.src = url;
+  });
+});
 
 // 行缩略图随滚动重排（capture 捕获 .wlist 自身滚动，列表重建后无需重绑）
 listEl.addEventListener("scroll", () => requestAnimationFrame(layoutThumbs), true);

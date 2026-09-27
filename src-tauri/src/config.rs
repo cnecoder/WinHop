@@ -81,6 +81,48 @@ impl<'de> Deserialize<'de> for WinDigitMode {
     }
 }
 
+/// 覆盖层背景效果：Solid=纯不透明暗色（默认）；Acrylic=系统级毛玻璃模糊。
+/// （曾有三档半透明 translucent，实测桌面透出显得杂乱，已移除；老配置值经 parse 归入 Solid）
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum OverlayBg {
+    #[default]
+    Solid,
+    Acrylic,
+}
+
+impl OverlayBg {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            OverlayBg::Solid => "solid",
+            OverlayBg::Acrylic => "acrylic",
+        }
+    }
+    // 解析；非法值（含已移除的 translucent）回退默认（与历史 validate 行为一致，调用方无需再校验）
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "acrylic" => OverlayBg::Acrylic,
+            _ => OverlayBg::Solid,
+        }
+    }
+}
+
+impl Serialize for OverlayBg {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for OverlayBg {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        let v = OverlayBg::parse(&s);
+        if !s.is_empty() && v.as_str() != s {
+            eprintln!("[winhop] 配置 overlay_bg 无效「{}」，回退为 {}", s, v.as_str());
+        }
+        Ok(v)
+    }
+}
+
 #[derive(Deserialize, Serialize, Clone)]
 pub struct Config {
     pub hotkey: String,
@@ -101,6 +143,13 @@ pub struct Config {
     /// 界面语言："zh-CN"/"en"，空串为跟随系统（默认）
     #[serde(default)]
     pub lang: String,
+    /// 覆盖层背景效果：solid=不透明（默认）/ acrylic=系统级模糊（translucent 已移除，老值归入 solid）
+    #[serde(default)]
+    pub overlay_bg: OverlayBg,
+    /// 关闭（退出类与切换类）是否 ~200ms 淡出：目标窗口在淡出动画后方立即激活；
+    /// 关闭后 overlay_hidden 收尾 hide。false=全部瞬时
+    #[serde(default = "default_true")]
+    pub close_anim: bool,
     /// 用户偏好的每页卡片数（设置页 8–64 可填）。实际生效页长由前端按屏幕高度
     /// 反推可行区间后钳制（set_page_size，仅本次运行不持久化），保证卡片缩放
     /// 始终在 0.75–1.35 内且铺满屏幕
@@ -199,6 +248,8 @@ impl Default for Config {
             theme: default_theme(),
             win_digit_mode: WinDigitMode::default(),
             lang: String::new(),
+            overlay_bg: OverlayBg::default(),
+            close_anim: true,
             prog_page_size: default_prog_page_size(),
             programs: Vec::new(),
             blocked: Vec::new(),
@@ -217,6 +268,10 @@ pub struct Program {
     pub multi_key: String,
     pub name: String,
     pub process: String,
+    /// 最近一次观测到的 exe 完整路径（程序运行时自动记录，供未运行时提取图标；
+    /// 空 = 尚未观测到。自动维护，编辑面板不展示）
+    #[serde(default)]
+    pub path: String,
 }
 
 // 读取并规范化某个路径下的配置文件（解析失败即 panic，不静默）
@@ -401,6 +456,7 @@ fn default_programs() -> Vec<Program> {
         multi_key: String::new(),
         name: name.into(),
         process: proc.into(),
+        path: String::new(),
     };
     vec![
         p("Chrome", "chrome.exe"),
@@ -482,6 +538,7 @@ mod tests {
             multi_key: mk.into(),
             name: name.into(),
             process: proc_.into(),
+            path: String::new(),
         }
     }
 
@@ -628,6 +685,34 @@ mod tests {
             c.prog_page_size = bad;
             validate(&mut c);
             assert_eq!(c.prog_page_size, want, "bad={}", bad);
+        }
+    }
+
+    #[test]
+    fn overlay_bg_and_close_anim_defaults_and_fallback() {
+        // 缺字段：overlay_bg → solid，close_anim → true
+        let cfg: Config =
+            serde_json::from_str(r#"{"hotkey":"ctrl+space","programs":[]}"#).unwrap();
+        assert_eq!(cfg.overlay_bg, OverlayBg::Solid);
+        assert!(cfg.close_anim);
+        // 已移除的 translucent 与非法值都回退 solid；close_anim=false 保留
+        for legacy in ["translucent", "bogus"] {
+            let cfg: Config = serde_json::from_str(
+                &format!(
+                    r#"{{"hotkey":"ctrl+space","programs":[],"overlay_bg":"{}","close_anim":false}}"#,
+                    legacy
+                ),
+            )
+            .unwrap();
+            assert_eq!(cfg.overlay_bg, OverlayBg::Solid, "legacy={}", legacy);
+            assert!(!cfg.close_anim);
+        }
+        // 合法值序列化 roundtrip
+        for want in [OverlayBg::Acrylic, OverlayBg::Solid] {
+            let mut c = minimal_cfg();
+            c.overlay_bg = want;
+            let back: Config = serde_json::from_str(&serde_json::to_string(&c).unwrap()).unwrap();
+            assert_eq!(back.overlay_bg, want);
         }
     }
 

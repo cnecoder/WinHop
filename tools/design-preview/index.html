@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="black-green">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- 设计预览 mock：直接引用真实样式表，零漂移。改样式只改 src/styles.css，本文件不复制样式。 -->
+    <link rel="stylesheet" href="../../src/styles.css" />
+    <title>WinHop 设计预览</title>
+    <style>
+      /* 仅 mock 布局覆盖：把全屏覆盖层摊平成可滚动长页 */
+      body { overflow: auto; background: #050608; }
+      #app {
+        display: block !important;
+        width: 100%;
+        height: auto;
+        min-height: 100vh;
+        overflow: visible;
+        padding: 0;
+        background: transparent;
+        animation: none;
+      }
+      .mock-section { padding: 22px 36px; }
+      .mock-section + .mock-section { border-top: 1px dashed rgba(128,140,160,0.25); }
+      .mock-label {
+        font-family: var(--font-mono);
+        font-size: 12px;
+        color: var(--dim);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        margin-bottom: 14px;
+      }
+      .mock-theme-bar {
+        position: sticky;
+        top: 0;
+        z-index: 200;
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        padding: 10px 36px;
+        background: rgba(5,6,8,0.92);
+        backdrop-filter: blur(6px);
+        border-bottom: 1px solid rgba(128,140,160,0.2);
+        font-size: 13px;
+        color: var(--fg);
+      }
+      .mock-theme-bar label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+      .mock-theme-bar input { accent-color: var(--accent); }
+      .mock-surface { background: var(--bg); border-radius: var(--r-panel); padding: 18px; }
+      #mock-win { max-width: none; margin: 0; }
+      #settings-view { display: block; }
+      #settings-body { max-height: none; overflow: visible; }
+      #confirm-mask { position: static; inset: auto; background: none; z-index: auto; display: block; }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <!-- 主题切换 -->
+      <div class="mock-theme-bar">
+        <strong>WinHop 设计预览</strong>
+        <label><input type="radio" name="mocktheme" value="black-green" checked onchange="document.documentElement.dataset.theme=this.value" /> 黑绿</label>
+        <label><input type="radio" name="mocktheme" value="black-yellow" onchange="document.documentElement.dataset.theme=this.value" /> 黑黄</label>
+        <span style="color:var(--dim); margin-left:auto; font-family:var(--font-mono); font-size:12px;">系统字体 Segoe UI / 雅黑 · 中性 off-black 底 · 单 accent · 内描边选中</span>
+      </div>
+
+      <!-- ========== 程序层 ========== -->
+      <div class="mock-section">
+        <div class="mock-label">程序层 / 多字母模式</div>
+        <div class="mock-surface">
+          <div id="overlay-view">
+            <div id="header">
+              <span class="header-left">
+                <span id="title">WinHop</span>
+                <span class="mode-badge mode-multi">多字母</span>
+              </span>
+              <span class="header-right">
+                <span id="legend">
+                  <span class="legend-item"><span class="key key-cfg demo"></span>已配置·运行</span>
+                  <span class="legend-item"><span class="key key-auto demo"></span>动态检测</span>
+                  <span class="legend-item"><span class="key key-off demo"></span>已配置·未运行</span>
+                </span>
+                <span class="header-sep"></span>
+                <button id="settings-btn" title="设置 (F2)">设置</button>
+                <span id="hint">Esc 退出</span>
+              </span>
+            </div>
+
+            <div id="list">
+              <div class="toolbar">
+                <div class="filter-bar">
+                  <span class="filter-label">筛选</span>
+                  <span class="filter-box active">ch<span class="caret">▏</span></span>
+                  <span class="filter-hint">Enter 确认，Esc 清除，Backspace 删除</span>
+                </div>
+                <span class="pager">第 1 / 2 页 · PageUp/PageDown 翻页</span>
+              </div>
+
+              <!-- 已配置运行中 -->
+              <div class="row" data-key="c" data-process="chrome.exe">
+                <span class="key key-cfg">ch</span>
+                <span class="name">Google Chrome (chrome.exe)</span>
+                <span class="screen">×3</span>
+                <button class="edit-btn" title="编辑">✎</button>
+              </div>
+
+              <!-- 选中行（内描边 + tint） -->
+              <div class="row active" data-key="v" data-process="code.exe">
+                <span class="key key-cfg">vs</span>
+                <span class="name">Visual Studio Code (code.exe)</span>
+                <span class="screen">×2</span>
+                <button class="edit-btn" title="编辑">✎</button>
+              </div>
+
+              <!-- 动态检测（虚线） -->
+              <div class="row" data-key="n" data-process="notion.exe">
+                <span class="key key-auto">n</span>
+                <span class="name">Notion (notion.exe)</span>
+                <span class="screen">×1</span>
+                <button class="edit-btn" title="编辑">✎</button>
+              </div>
+
+              <!-- 未配置代号（占位点，多字母模式未分配） -->
+              <div class="row" data-key="" data-process="spotify.exe">
+                <span class="key key-empty">·</span>
+                <span class="name">Spotify (spotify.exe)</span>
+                <span class="screen">×1</span>
+                <button class="edit-btn" title="编辑">✎</button>
+              </div>
+
+              <!-- 编辑面板 -->
+              <div class="row" data-key="t" data-process="windowsterminal.exe">
+                <span class="key key-cfg">te</span>
+                <span class="name">终端 (windowsterminal.exe)</span>
+                <span class="screen">×1</span>
+                <button class="edit-btn" title="编辑" style="display:none">✎</button>
+              </div>
+              <div class="add-panel">
+                <div class="add-fields">
+                  <input class="key-input" value="te" />
+                  <input class="name-input" value="终端" />
+                  <button class="confirm-btn">保存</button>
+                </div>
+                <span class="free-hint">多字母代号（如 ch、vs），匹配时优先于软件名；留空则只按名称匹配　可用: <b>a</b> <b>b</b> <b>g</b> <b>h</b> <b>k</b></span>
+              </div>
+
+              <!-- 已配置未运行（整行置灰） -->
+              <div class="row off" data-key="f" data-process="firefox.exe">
+                <span class="key key-off">ff</span>
+                <span class="name">Firefox (firefox.exe)</span>
+                <span class="screen">未运行</span>
+                <button class="edit-btn" title="编辑">✎</button>
+              </div>
+              <div class="row off" data-key="d" data-process="discord.exe">
+                <span class="key key-off">di</span>
+                <span class="name">Discord (discord.exe)</span>
+                <span class="screen">未运行</span>
+                <button class="edit-btn" title="编辑">✎</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ========== 无匹配空状态 ========== -->
+      <div class="mock-section">
+        <div class="mock-label">无匹配空状态</div>
+        <div class="mock-surface">
+          <div id="list">
+            <div class="toolbar">
+              <div class="filter-bar">
+                <span class="filter-label">筛选</span>
+                <span class="filter-box active">zzz<span class="caret">▏</span></span>
+                <span class="filter-hint">Enter 确认，Esc 清除，Backspace 删除</span>
+              </div>
+              <span class="pager"></span>
+            </div>
+            <div class="empty-hint"><span class="key key-empty">·</span><span>无匹配「zzz」，Esc 清除筛选</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ========== 窗口层 ========== -->
+      <div class="mock-section">
+        <div class="mock-label">窗口层 / 缩略图 + 大预览</div>
+        <div class="mock-surface">
+          <div class="window-layer" id="mock-win">
+            <div class="wlist">
+              <div class="wrow">
+                <div class="wtop">
+                  <span class="key">1</span>
+                  <span class="name">src/styles.css — WinHop</span>
+                  <span class="screen">屏1</span>
+                </div>
+                <img class="wthumb" alt="" src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='320' height='180'><rect width='100%' height='100%' fill='rgb(18,20,26)'/><rect x='14' y='14' width='130' height='12' rx='3' fill='rgb(64,72,88)'/><rect x='14' y='40' width='220' height='9' rx='3' fill='rgb(44,50,62)'/><rect x='14' y='60' width='180' height='9' rx='3' fill='rgb(44,50,62)'/><rect x='14' y='86' width='290' height='80' rx='5' fill='rgb(28,32,40)'/></svg>" />
+              </div>
+              <div class="wrow active">
+                <div class="wtop">
+                  <span class="key">2</span>
+                  <span class="name">main.rs — WinHop</span>
+                  <span class="screen">屏1</span>
+                </div>
+                <img class="wthumb" alt="" src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='320' height='180'><rect width='100%' height='100%' fill='rgb(18,20,26)'/><rect x='14' y='14' width='120' height='12' rx='3' fill='rgb(64,72,88)'/><rect x='14' y='40' width='240' height='9' rx='3' fill='rgb(44,50,62)'/><rect x='14' y='60' width='200' height='9' rx='3' fill='rgb(44,50,62)'/><rect x='14' y='86' width='290' height='80' rx='5' fill='rgb(28,32,40)'/></svg>" />
+              </div>
+              <div class="wrow">
+                <div class="wtop">
+                  <span class="key">3</span>
+                  <span class="name">config.rs — WinHop</span>
+                  <span class="screen">屏2</span>
+                </div>
+                <img class="wthumb" alt="" src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='320' height='180'><rect width='100%' height='100%' fill='rgb(18,20,26)'/><rect x='14' y='14' width='140' height='12' rx='3' fill='rgb(64,72,88)'/><rect x='14' y='40' width='190' height='9' rx='3' fill='rgb(44,50,62)'/><rect x='14' y='60' width='230' height='9' rx='3' fill='rgb(44,50,62)'/><rect x='14' y='86' width='290' height='80' rx='5' fill='rgb(28,32,40)'/></svg>" />
+              </div>
+              <div class="wrow">
+                <div class="wtop">
+                  <span class="key">4</span>
+                  <span class="name">README.md — WinHop</span>
+                  <span class="screen">屏2</span>
+                </div>
+                <img class="wthumb" alt="" src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='320' height='180'><rect width='100%' height='100%' fill='rgb(18,20,26)'/><rect x='14' y='14' width='110' height='12' rx='3' fill='rgb(64,72,88)'/><rect x='14' y='40' width='250' height='9' rx='3' fill='rgb(44,50,62)'/><rect x='14' y='60' width='170' height='9' rx='3' fill='rgb(44,50,62)'/><rect x='14' y='86' width='290' height='80' rx='5' fill='rgb(28,32,40)'/></svg>" />
+              </div>
+            </div>
+            <div class="wpreview">
+              <img id="preview-img" alt="" src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='960' height='540'><rect width='100%' height='100%' fill='rgb(16,18,24)'/><rect x='40' y='40' width='360' height='30' rx='6' fill='rgb(70,80,98)'/><rect x='40' y='100' width='700' height='20' rx='5' fill='rgb(48,54,68)'/><rect x='40' y='140' width='620' height='20' rx='5' fill='rgb(48,54,68)'/><rect x='40' y='180' width='680' height='20' rx='5' fill='rgb(48,54,68)'/><rect x='40' y='240' width='880' height='260' rx='8' fill='rgb(26,30,38)'/></svg>" />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ========== 设置页 ========== -->
+      <div class="mock-section">
+        <div class="mock-label">设置页</div>
+        <div class="mock-surface">
+          <div id="settings-view">
+            <div id="settings-header">
+              <button id="settings-back" title="返回 (Esc)">← 返回</button>
+              <span id="settings-title">设置 <span id="settings-status" class="settings-status"></span></span>
+              <button id="settings-save" class="primary-btn">保存</button>
+            </div>
+            <div id="settings-body">
+              <div class="setting-section">
+                <div class="setting-group-title">窗口排序方式</div>
+                <label class="setting-row"><input type="radio" name="order" value="zorder" checked /><span>固定序号（按创建顺序，不受使用影响）</span></label>
+                <label class="setting-row"><input type="radio" name="order" value="mru" /><span>最近使用优先（上次用的排 1）</span></label>
+              </div>
+
+              <div class="setting-section">
+                <div class="setting-group-title">多字母模式</div>
+                <label class="setting-row"><input type="checkbox" id="multi-letter" checked /><span>连续输入字母按代号/名称筛选，回车确认（关闭时单字母直切）</span></label>
+              </div>
+
+              <div class="setting-section">
+                <div class="setting-group-title">主题</div>
+                <div id="theme-options">
+                  <label class="setting-row"><input type="radio" name="theme" value="black-green" checked /><span>黑绿</span></label>
+                  <label class="setting-row"><input type="radio" name="theme" value="black-yellow" /><span>黑黄</span></label>
+                </div>
+              </div>
+
+              <div class="setting-section">
+                <button id="quit-btn" class="setting-row-btn">退出 WinHop</button>
+              </div>
+
+              <div class="setting-section">
+                <div class="setting-group-title">关于</div>
+                <div id="version-info" class="version-info">版本 0.2.0</div>
+                <div class="setting-group-title" style="margin-top:14px">更新记录</div>
+                <div id="changelog" class="changelog">
+                  <div class="changelog-entry">
+                    <div class="changelog-ver">0.2.0 <span class="changelog-date">2026-08</span></div>
+                    <ul>
+                      <li>多字母模式：连续输入字母按代号/名称筛选，回车确认</li>
+                      <li>皮肤系统：设置页可切换主题（黑绿 / 黑黄）</li>
+                      <li>视觉重设计：中性 off-black 底、系统原生字体、内描边选中、统一圆角</li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ========== 确认弹窗 ========== -->
+      <div class="mock-section">
+        <div class="mock-label">未保存确认弹窗</div>
+        <div class="mock-surface">
+          <div id="confirm-mask">
+            <div id="confirm-dialog">
+              <div class="confirm-text">有未保存的修改，是否保存？</div>
+              <div class="confirm-buttons">
+                <button id="confirm-save" class="primary-btn">保存</button>
+                <button id="confirm-discard">不保存</button>
+                <button id="confirm-cancel">取消</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

@@ -13,7 +13,7 @@ Windows 窗口**快速切换器**，不是启动器：
 ## 2. 技术栈
 
 - **Rust + Tauri 2.x**（WebView2 前端）。Windows API 全部用 `windows-sys` 直调，无跨平台抽象。
-- 依赖：`tauri`、`tauri-plugin-global-shortcut`（系统热键）、`serde`/`serde_json`（配置）、`windows-sys`。
+- 依赖：`tauri`、`tauri-plugin-global-shortcut`（系统热键）、`serde`/`serde_json`（配置）、`base64`（图标载荷编码）、`windows-sys`。
 - 前端：原生 HTML/CSS/JS（无框架），`withGlobalTauri` 下经 `window.__TAURI__` 调 `invoke`/`listen`。
 - 曾用 `windows` crate 做 WGC 窗口截图，缩略图改 DWM 方案后已整条移除（无截图/编码代码）。
 
@@ -119,7 +119,21 @@ MRU 在经 WinHop 切换、呼出时记录前台、以及看门狗线程检测�
 
 ### 缩略图（DWM）
 
-窗口层行缩略图与右侧大预览都用 **DWM 缩略图**（`DwmRegisterThumbnail` / `DwmUpdateThumbnailProperties`，Win+Tab 同款）：DWM 直接把目标窗口纹理实时合成到覆盖层区域，零拷贝、抗遮挡、抗最小化（最小化用 `rcNormalPosition` 还原尺寸 + CLIENTONLY 路径）。按 `slot`（`"pane"` 大预览 / `"row:<hwnd>"` 行）注册，换源先注销；回程序层/关闭时 `thumb_clear` 全部注销。
+窗口层行缩略图与右侧大预览都用 **DWM 缩略图**（`DwmRegisterThumbnail` / `DwmUpdateThumbnailProperties`，Win+Tab 同款）：DWM 直接把目标窗口纹理实时合成到覆盖层区域，零拷贝、抗遮挡、抗最小化（最小化用 `rcNormalPosition` 还原尺寸 + CLIENTONLY 路径）。按 `slot`（`"pane"` 大预览 / `"row:<hwnd>"` 行）注册，换源先注销；回程序层/关闭时 `thumb_clear` 全部注销。**源矩形四边内缩 6px**：最小化窗口按整窗缓存采样时边框扣除有度量误差，且 explorer 等自绘边框应用会在客户区约 2~4px 处画一圈浅灰内边框，采样边缘会残留亮线（白线）；6px 内缩统一裁除（内容损失不可感知）。**最小化源空间原点在窗口外沿**：两条最小化路径的源原点都偏移到客户区 `(侧框, 顶框+标题高)`，避免把边框与标题条采进纹理。**锚点元素用 div 不用 img**：DWM 纹理之下的 img 合成层会在其矩形边缘露出 1px 亮缝（白线的真正根因，实测 div 锚点后消失，且不受源内缩影响）。窗口层**入场动画只做 opacity 淡入、不用 transform**（transform 会让动画期的 `getBoundingClientRect` 与缩略图落点错位），且入场帧的 `thumb_set` 布局推迟到动画结束后（DWM 合成层不参与 CSS 动画，提前落位会先于半透明面板出现）。
+
+### 程序图标
+
+- 提取（`windows::extract_icon_rgba`）：`SHGetFileInfoW`（32px）→ `GetIconInfo` 拆出颜色位图 → `GetDIBits` 读自顶向下 32bpp BGRA → 还原预乘 alpha 转直通 RGBA。不做 PNG 编码（免依赖），裸像素经 base64 下发，前端 canvas `putImageData` 一次性转 PNG dataURL 缓存。
+- 缓存：lib.rs 静态 `ICONS`（process → `"宽:高:base64"`），进程内常驻；提取失败缓存空串不重试。PWA（`pwa#<id>`）的窗口 path 即宿主浏览器 exe，自然取到宿主图标。
+- **未运行的程序也有图标**，路径按优先级解析：① 运行中 → 窗口枚举到的 exe 路径；② 未运行 → 配置条目记录的 `path`（运行时自动学习，见下）；③ 注册表 **App Paths** 查询（`HKLM`/`HKCU` `...\App Paths\<process>`，剥引号/参数尾巴，须为存在的 .exe）；④ **开始菜单 .lnk 索引**（PowerToys Run / Flow Launcher 同款方案）：惰性递归扫描两个开始菜单 Programs 目录，IShellLink COM（vtable 手写）解析目标 exe，按「目标文件名 → 完整路径」建一次性索引（进程内缓存）。全落空 → 透明占位（PWA 无独立 exe 天然落空）。
+- **路径自动学习**：后台提取线程把观测到的 exe 完整路径写回 `cfg.programs[].path`（仅变化条目、原子落盘）。程序第一次运行过之后，未运行时图标即永久可用。
+- 下发：`open()` 时对「缓存缺失」的程序收集清单，**后台线程**提取（逐个可能命中磁盘，不阻塞呼出），完成后以独立 `icons` 事件增量补发——不放进每次按键都重发的 `overlay` 渲染事件。前端收到后回填已渲染行的 `<img class="picon">`（无图标用透明占位保持行布局）。
+
+### 动效（呼出/关闭）
+
+- 呼出：`#app` `overlay-in`（透明淡入 + 4px 上浮，`--dur`）；程序行 `row-in` 逐行 12ms 级联（行内联 `--i` 封顶 6 档），仅「重新呼出首帧」播放（`#list.enter` 作用域，键入筛选/翻页重建不重播）；窗口层两面板 `fade-in` 仅 opacity（见缩略图一节）。
+- 关闭：`close_anim` 开启时退出类关闭走 `#app.closing` opacity 过渡 ~200ms（`--dur-close`；切换类关闭一律瞬时，激活在淡出动画结束的回执后执行，见 §7 焦点与关闭）；`prefers-reduced-motion` 下跳过计时直接回执。
+- 全部沿用 `--dur`/`--ease` 令牌、只动 opacity/transform，被 `prefers-reduced-motion` 全局归零覆盖（reduced-motion 下淡出跳过动画直接回执）。
 
 ### 覆盖层缩放（前端自适应）
 
@@ -152,6 +166,8 @@ MRU 在经 WinHop 切换、呼出时记录前台、以及看门狗线程检测�
   "theme": "black-green",
   "win_digit_mode": "jump",
   "prog_page_size": 20,
+  "overlay_bg": "solid",
+  "close_anim": true,
   "lang": "",
   "programs": [
     { "key": "c", "multi_key": "ch", "name": "Chrome", "process": "chrome.exe" }
@@ -171,14 +187,16 @@ MRU 在经 WinHop 切换、呼出时记录前台、以及看门狗线程检测�
 | `theme` | 主题 id：`black-green`（默认）/ `black-yellow`；配色全走 CSS 变量，`<html data-theme>` 切换 |
 | `win_digit_mode` | 窗口层数字行为：`jump` 直切 / `preview` 先预览 |
 | `prog_page_size` | 每页卡片数**偏好**，8–64，默认 20；实际生效值由前端按屏幕钳制后经 `set_page_size` 下发（仅运行时，不持久化），Rust 分页与前端缩放共用生效值 |
+| `overlay_bg` | 覆盖层背景效果：`solid`（默认，纯不透明暗色）/ `acrylic`（系统级毛玻璃模糊，Win10 1809+ 走 `SetWindowCompositionAttribute` ACCENT_ENABLE_ACRYLICBLURBEHIND，Win11 走 `DWMWA_SYSTEMBACKDROP_TYPE`）。非 acrylic 模式无窗口特效、纯 CSS；切换即时生效（`set_overlay_bg` 命令，预览/保存/回退共用）。曾有三档半透明 `translucent`（桌面透出显得杂乱）已移除，老配置值经 parse 归入 solid |
+| `close_anim` | **退出类关闭**（Esc/点击外部/再按热键）是否 ~200ms 柔和淡出（默认 true）；切换类关闭（Space/数字/回车/跳转）与焦点丢失路径始终瞬时；淡出的激活在动画结束回执后（`overlay_hidden` → hide+激活）——淡出期提前激活会析出「可见但已失焦」伪影；false=全部瞬时 |
 | `lang` | 界面语言：空=跟随系统，`zh-CN` / `en` |
-| `programs[]` | `key` 单字母代号（单小写字母，可空）、`multi_key` 多字母代号（全小写，可空）、`name` 显示名、`process` 小写 exe 名；`key`/`multi_key` 各自唯一 |
+| `programs[]` | `key` 单字母代号（单小写字母，可空）、`multi_key` 多字母代号（全小写，可空）、`name` 显示名、`process` 小写 exe 名；`key`/`multi_key` 各自唯一。`path` 为自动学习的 exe 完整路径（供未运行时提取图标，编辑面板不展示） |
 | `blocked[]` | 黑名单，兼容裸字符串或 `{process,note}`；进程名小写 |
 | `blocked_seeded` | 系统黑名单是否已播种（仅一次） |
 
 ### 校验与保存
 
-- 加载时归一化（进程名/代号小写）、去重黑名单；`window_order`/`theme`/`win_digit_mode`/`lang` 非法值回退默认；`prog_page_size` 越界（非 8–64）记 eprintln 并钳制到边界，不 panic（该值只是偏好，屏幕可行性运行时再钳）；`key` 非单小写字母或重复、`multi_key` 非法或重复 → **panic**（配置错误启动即暴露，不静默）。
+- 加载时归一化（进程名/代号小写）、去重黑名单；`window_order`/`theme`/`win_digit_mode`/`lang`/`overlay_bg` 非法值回退默认；`prog_page_size` 越界（非 8–64）记 eprintln 并钳制到边界，不 panic（该值只是偏好，屏幕可行性运行时再钳）；`key` 非单小写字母或重复、`multi_key` 非法或重复 → **panic**（配置错误启动即暴露，不静默）。
 - **原子保存**：写 `config.json.tmp` 再 `rename`，防写坏导致下次起不来。
 - UI 内修改（✎ 编辑/删除、屏蔽、设置页保存）即时落盘并 `rebuild_and_emit`/`refresh_overlay` 刷新覆盖层；直接改文件需重启。
 
@@ -194,8 +212,13 @@ MRU 在经 WinHop 切换、呼出时记录前台、以及看门狗线程检测�
 
 - 覆盖层全屏、`transparent`、`alwaysOnTop`、`skipTaskbar`、无装饰。
 - `open()` 夺焦后校验前台是否为覆盖层；拿不到键盘焦点（如非提权 + 管理员窗口前台）则直接关闭还原，避免按键落入后台程序。
-- `Focused(false)`（Alt+Tab / Win 键离开）→ 关闭但**不还原旧前台**（用户已主动切走，不抢回）；选择窗口后的关闭才激活目标/还原。
-- 看门狗线程（2s）：检测「`visible=true` 但窗口不可见」的分叉状态强制关闭；顺带补录 MRU。
+- 关闭（`close_impl`，激活目标：`pending` 优先，否则 `restore_prev && !switched` 时回退 `prev_fg`）：
+  - **`close_anim=true`（默认，淡出仅限退出类）**：退出类关闭（Esc 空筛选 / 点击外部 / 再按热键 / 托盘，无 `pending`、还原旧前台）不立即 `win.hide()`——置 `visible=false`、把激活目标存入 `hide_target` 并记 `hide_pending_since`，emit `anim_close_ms:200`；**淡出全程窗口保持焦点，激活推迟**：前端播完 ~200ms 透明淡出后回执新命令 `overlay_hidden`，由它 `win.hide()` + spawn 激活线程（激活仍在 emit 与 hide 之后，时序红线以构造顺序保持）。**激活不能提前到动画期**：实测淡出期间立即激活会让目标窗口抢走焦点，覆盖层沦为「可见但已失焦」的全屏窗口，析出顶端横条等伪影。**切换类（`pending!=0`，Space/数字/回车/跳转）一律瞬时**：用户在等目标窗口弹出，实测任何可感知的淡出都显得迟钝（100ms 档亦然，已移除）。
+  - **`close_anim=false`（瞬时）**：立即 `win.hide()` → emit `visible=false` → 独立线程激活目标，顺序保证 WebView2 IPC 不被抢焦点阻塞（见 lib.rs 注释）。
+  - **例外：`close_no_restore`（Focused(false)，用户已 Alt+Tab 切走）一律瞬时隐藏**，不淡出——窗口已失焦，不允许滞留为可见状态。
+  - 淡出期间焦点被外部抢走（Focused(false) 且 `hide_pending_since != 0`）：立即 `win.hide()` 并清空挂起状态（用户已切走，激活目标作废）；后续回执因 `hide_pending_since==0` 自动忽略。
+  - `overlay_hidden` 其余防护：`visible==true`（淡出期间已重呼）直接忽略；重呼（`open()`）会清两个挂起标记，前端收到 `visible=true` 也取消淡出不回执。
+- 看门狗线程（2s）：检测「`visible=true` 但窗口不可见」的分叉状态强制关闭；另兜底「`visible=false` 但 `hide_pending_since` 超 1.5s」（淡出回执丢失/webview 挂死）强制 hide+激活，防止覆盖层永远浮在最上层；顺带补录 MRU。
 
 ### 热键录制（设置页）
 

@@ -7,7 +7,8 @@
     <script type="module" src="/main.js" defer></script>
   </head>
   <body>
-    <div id="app">
+    <!-- data-bg 默认不透明（solid），启动后由 main.js 按配置覆盖 -->
+    <div id="app" data-bg="solid">
       <!-- 覆盖层（程序层/窗口层） -->
       <div id="overlay-view">
         <div id="header">
@@ -105,6 +106,31 @@
           <div class="setting-section">
             <div class="setting-group-title" data-i18n="setTheme">主题</div>
             <div id="theme-options"></div>
+          </div>
+
+          <div class="setting-section">
+            <div class="setting-group-title" data-i18n="setOverlayBg">背景效果</div>
+            <label class="setting-row">
+              <input type="radio" name="overlay-bg" value="solid" checked />
+              <span data-i18n="bgSolid">不透明暗色（默认）</span>
+            </label>
+            <label class="setting-row">
+              <input type="radio" name="overlay-bg" value="acrylic" />
+              <span data-i18n="bgAcrylic">毛玻璃 Acrylic（系统级模糊）</span>
+            </label>
+          </div>
+
+          <div class="setting-section">
+            <div class="setting-group-title" data-i18n="setCloseAnim">关闭动画</div>
+            <label class="setting-row">
+              <input type="radio" name="close-anim" value="fade" checked />
+              <span data-i18n="closeAnimFade">淡出（关闭时短暂淡出，切换更柔和）</span>
+            </label>
+            <label class="setting-row">
+              <input type="radio" name="close-anim" value="instant" />
+              <span data-i18n="closeAnimInstant">瞬时（关闭零延迟）</span>
+            </label>
+            <div class="pagesize-hint" data-i18n="closeAnimHint">切换窗口类操作始终瞬时；此开关只控制 Esc / 点击外部等退出类关闭的 ~0.2 秒柔和淡出</div>
           </div>
 
           <div class="setting-section">
