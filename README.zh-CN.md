@@ -19,9 +19,9 @@ Rust + Tauri 2（WebView2）· Windows 10/11 x64
 四种组合演示：单字母 / 多字母模式 × 单窗口 / 多窗口程序，以及空格在最近两个窗口间快速切换。
 
 <div align="center">
-  <a href="assets/promo-zh.mp4"><img src="assets/promo-zh-poster.png" alt="WinHop 演示视频" width="720"></a>
+  <img src="assets/promo-zh.gif" alt="WinHop 演示" width="720">
   <br>
-  <sub>点击封面播放 60 秒完整演示</sub>
+  <sub><a href="https://github.com/cnecoder/WinHop/raw/main/assets/promo-zh.mp4">观看完整演示视频（61 秒）</a></sub>
 </div>
 
 ## 为什么用 WinHop

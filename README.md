@@ -19,9 +19,9 @@ Rust + Tauri 2 (WebView2) · Windows 10/11 x64
 Four scenarios in action: single-letter and multi-letter modes over single-window and multi-window apps, plus Space to toggle between the two most recent windows.
 
 <div align="center">
-  <a href="assets/promo-en.mp4"><img src="assets/promo-en-poster.png" alt="WinHop demo video" width="720"></a>
+  <img src="assets/promo-en.gif" alt="WinHop demo" width="720">
   <br>
-  <sub>Click the cover to play the 60-second demo</sub>
+  <sub><a href="https://github.com/cnecoder/WinHop/raw/main/assets/promo-en.mp4">Watch the full 61-second demo</a></sub>
 </div>
 
 ## Why WinHop

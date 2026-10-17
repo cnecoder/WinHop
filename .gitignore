@@ -43,6 +43,7 @@ target
 /tools/promo/frames/
 /tools/promo/*.mp4
 /tools/promo/*.png
+/tools/promo/*.gif
 /tools/promo/*.txt
 
 # 本地项目记忆
