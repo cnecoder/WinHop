@@ -88,8 +88,9 @@ git push origin vX.Y.Z
 产物：
 
 ```
-src-tauri/target/release/bundle/nsis/WinHop_X.Y.Z_x64-setup.exe   ← NSIS（推荐）
+src-tauri/target/release/bundle/nsis/WinHop_X.Y.Z_x64-setup.exe   ← NSIS（推荐，图标用 icons/icon.ico，见 tauri.conf 的 nsis.installerIcon）
 src-tauri/target/release/bundle/msi/WinHop_X.Y.Z_x64_en-US.msi    ← MSI
+checksums.txt                                                      ← CI 生成，两包的 SHA256
 ```
 
 ## 5. 创建 GitHub Release
@@ -100,8 +101,9 @@ src-tauri/target/release/bundle/msi/WinHop_X.Y.Z_x64_en-US.msi    ← MSI
 本地 `npm run tauri build` 不是必需（仅用于发布前本地验包）。
 
 推 `vX.Y.Z` tag 即触发 GitHub Actions（`.github/workflows/ci.yml`）：先跑测试，
-再 `npm run tauri build`，然后**幂等**发布——Release 不存在则 `gh release create`（note 用
-`--generate-notes`），已存在则 `gh release upload --clobber` 只覆盖安装包、**不动正文**。
+再 `npm run tauri build`，然后生成 `checksums.txt`（两安装包的 SHA256，附到 Release 供用户核对），
+最后**幂等**发布——Release 不存在则 `gh release create`（note 用
+`--generate-notes`），已存在则 `gh release upload --clobber` 只覆盖安装包与校验值、**不动正文**。
 因此可先手动 `gh release create` 带上双语 note（方式 B），CI 构建完会把安装包补传到该 Release
 而不覆盖 note；或等 CI 建完再在 Release 页编辑补双语 note。
 

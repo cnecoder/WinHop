@@ -66,6 +66,10 @@ Rust + Tauri 2（WebView2）· Windows 10/11 x64
 
 要求 Windows 10/11 x64（WebView2 自带）。安装后运行，首次启动弹 UAC 提权确认（切换管理员程序必需）。
 
+> **关于 SmartScreen 提示**：安装包未做商业代码签名，下载时 Windows 可能提示「通常不会下载此文件 / 发布者：未知」。这是未签名开源软件的常规提示，不是病毒告警 —— 浏览器下载栏点「···」→「保留」，或运行时点「更多信息 → 仍要运行」即可继续安装。
+>
+> 每个 Release 附 `checksums.txt`（SHA256），可核对文件完整性：`Get-FileHash WinHop_x.y.z_x64-setup.exe -Algorithm SHA256`。
+
 ### 呼出与选择
 
 ```

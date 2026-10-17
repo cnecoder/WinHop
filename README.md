@@ -62,6 +62,10 @@ Download from [GitHub Releases](https://github.com/cnecoder/WinHop/releases):
 
 Requires Windows 10/11 x64 (WebView2 included). On first launch a UAC prompt asks for elevation (required to switch admin programs).
 
+> **About the SmartScreen warning**: the installer has no commercial code-signing certificate, so Windows may warn "This file isn't commonly downloaded / Publisher: Unknown". That is normal for unsigned open-source software, not a malware alert — click "Keep" in the browser's download bar, or "More info → Run anyway" when launching.
+>
+> Every release ships `checksums.txt` (SHA256); verify with `Get-FileHash WinHop_x.y.z_x64-setup.exe -Algorithm SHA256`.
+
 ### Open and pick
 
 ```
