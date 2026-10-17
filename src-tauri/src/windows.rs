@@ -635,15 +635,60 @@ pub fn activate(hwnd: isize) -> bool {
         );
         let success = ok != 0 && GetForegroundWindow() == h;
         if !success {
+            // ok=1 但前台未变 + 目标是管理员进程 → UIPI 拒绝（debug 构建未提权时
+            // 切管理员窗口必现，如管理员运行的微信；release 提权后不存在）
+            let uipi = is_target_elevated(h) && !is_elevated();
             eprintln!(
-                "[t={}] 激活 SetForegroundWindow 失败 hwnd={:#x} ok={} err={}",
+                "[t={}] 激活 SetForegroundWindow 失败 hwnd={:#x} ok={} err={}{}",
                 now_ms(),
                 hwnd,
                 ok,
-                GetLastError()
+                GetLastError(),
+                if uipi {
+                    "（目标为管理员窗口而本进程未提权，UIPI 拒绝；release 构建自动提权后可切）"
+                } else {
+                    ""
+                }
             );
         }
         success
+    }
+}
+
+// 目标窗口的进程是否以管理员令牌运行（激活失败时区分 UIPI 拒绝）。
+// 非提权进程对管理员进程 OpenProcessToken 会被拒绝 → 视为提权（这正是 UIPI 场景）。
+fn is_target_elevated(hwnd: HWND) -> bool {
+    unsafe {
+        let mut pid: u32 = 0;
+        GetWindowThreadProcessId(hwnd, &mut pid);
+        if pid == 0 {
+            return false;
+        }
+        let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if h.is_null() {
+            return false;
+        }
+        let mut elevated = false;
+        let mut tok: HANDLE = std::ptr::null_mut();
+        if OpenProcessToken(h, TOKEN_QUERY, &mut tok) != 0 {
+            let mut e: u32 = 0;
+            let mut rl: u32 = 0;
+            if GetTokenInformation(
+                tok,
+                TokenElevation,
+                &mut e as *mut u32 as *mut c_void,
+                4,
+                &mut rl,
+            ) != 0
+            {
+                elevated = e != 0;
+            }
+            CloseHandle(tok);
+        } else {
+            elevated = true; // 令牌读不了：对方是提权进程（本进程未提权时必然如此）
+        }
+        CloseHandle(h);
+        elevated
     }
 }
 
