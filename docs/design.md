@@ -220,7 +220,7 @@ MRU 在经 WinHop 切换、呼出时记录前台、以及看门狗线程检测�
   - **例外：`close_no_restore`（Focused(false)，用户已 Alt+Tab 切走）一律瞬时隐藏**，不淡出——窗口已失焦，不允许滞留为可见状态。
   - 淡出期间焦点被外部抢走（Focused(false) 且 `hide_pending_since != 0`）：立即 `win.hide()` 并清空挂起状态（用户已切走，激活目标作废）；后续回执因 `hide_pending_since==0` 自动忽略。
   - `overlay_hidden` 其余防护：`visible==true`（淡出期间已重呼）直接忽略；重呼（`open()`）会清两个挂起标记，前端收到 `visible=true` 也取消淡出不回执。
-- 看门狗线程（2s）：检测「`visible=true` 但窗口不可见」的分叉状态强制关闭；另兜底「`visible=false` 但 `hide_pending_since` 超 1.5s」（淡出回执丢失/webview 挂死）强制 hide+激活，防止覆盖层永远浮在最上层；顺带补录 MRU。
+- 看门狗线程（2s）：优先检测安装器退出标记 `%APPDATA%\WinHop\quit.flag`（升级/卸载时安装器写入，应用自退释放 exe 占用——安装器是 currentUser 权限杀不掉提权进程，见 `src-tauri/windows/hooks.nsh`；启动时会先清理遗留标记）；再检测「`visible=true` 但窗口不可见」的分叉状态强制关闭；另兜底「`visible=false` 但 `hide_pending_since` 超 1.5s」（淡出回执丢失/webview 挂死）强制 hide+激活，防止覆盖层永远浮在最上层；顺带补录 MRU。
 
 ### 热键录制（设置页）
 

@@ -1556,10 +1556,23 @@ fn handle_key(app: &AppHandle, msg: HookMsg) {
     apply_effect(app, &*inner, ov, eff);
 }
 
+// 安装器请求退出的标记文件（%APPDATA%\WinHop\quit.flag）：安装/卸载器在动文件前写入，
+// 看门狗检测到后优雅退出——安装器是 currentUser 权限，无法直接结束提权运行的 WinHop，
+// 因此改由应用自己退出（自己杀自己不受权限限制）
+fn quit_flag_path() -> std::path::PathBuf {
+    let dir = std::env::var("APPDATA")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::env::temp_dir());
+    dir.join("WinHop").join("quit.flag")
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     windows::redirect_stderr_to_file();
     eprintln!("=== winhop start ===");
+    // 清理上次安装器遗留的退出标记：安装失败/中断时可能残留 quit.flag，
+    // 不清理会导致本次启动被看门狗立即退出
+    let _ = std::fs::remove_file(quit_flag_path());
     let (cfg, cfg_path) = config::load();
     // taskmgr 等管理员程序需要提权才能钩子生效/激活；debug 构建跳过（dev 迭代不弹 UAC）
     if cfg.elevate && !cfg!(debug_assertions) && !windows::is_elevated() {
@@ -1646,7 +1659,8 @@ pub fn run() {
             if let Err(e) = app.global_shortcut().register(shortcut) {
                 eprintln!("[winhop] 热键注册失败: {}（可用托盘图标唤出覆盖层）", e);
             }
-            // 健康看门狗：仅检测「隐形覆盖层」异常（visible=true 但窗口不可见）。
+            // 健康看门狗：检测安装器退出标记（升级/卸载前写入，非安装器不触发）与
+            // 「隐形覆盖层」异常（visible=true 但窗口不可见）。
             // 不做空闲自动退出：配置面板打字不经过状态机，定时退出会打断用户操作。
             // 覆盖层只通过：热键 toggle / 选中窗口 / Esc / 点外部 关闭。
             let health_handle = app.handle().clone();
@@ -1654,6 +1668,14 @@ pub fn run() {
                 let mut last_fg: isize = 0;
                 loop {
                     std::thread::sleep(Duration::from_secs(2));
+                    // 安装器退出请求：升级/卸载前写入 quit.flag，检测到即优雅退出，
+                    // 释放 winhop.exe 占用，让安装器能正常卸载旧版本
+                    if quit_flag_path().exists() {
+                        let _ = std::fs::remove_file(quit_flag_path());
+                        eprintln!("[winhop] 收到安装器退出请求，优雅退出");
+                        health_handle.exit(0);
+                        return;
+                    }
                     let inner = health_handle.state::<Inner>();
                     // MRU 补录：用户手动点击/切换前台窗口也计入最近使用
                     let fg = windows::foreground();

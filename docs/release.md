@@ -93,6 +93,8 @@ src-tauri/target/release/bundle/msi/WinHop_X.Y.Z_x64_en-US.msi    ← MSI
 checksums.txt                                                      ← CI 生成，两包的 SHA256
 ```
 
+安装器（NSIS）在安装与卸载前会检测运行中的 WinHop：写入 `%APPDATA%\WinHop\quit.flag` 让应用自行退出（安装器是 currentUser 权限，杀不掉提权进程，故由应用自退，见 `src-tauri/windows/hooks.nsh`），用户无需手动退出。
+
 ## 5. 创建 GitHub Release
 
 ### 方式 A：CI 自动发布（推荐）
