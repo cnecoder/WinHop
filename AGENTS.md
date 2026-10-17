@@ -20,6 +20,7 @@ Windows 窗口快速切换器（Rust + Tauri 2 / WebView2，Windows-only）。�
 - `src-tauri/src/settings.rs` — 设置页：`get_settings`/`save_settings` 命令、设置 DTO、版本 changelog、热键注册与自启副作用
 - `src-tauri/src/hotkey_capture.rs` — 全局热键录制（`GetAsyncKeyState` 轮询绕开 IME）：start/poll/stop 命令与检测，自包含不依赖状态机
 - `src-tauri/src/windows.rs` — Win32：窗口枚举、激活、鼠标 LL 钩子、DWM 缩略图、语言/提权/单实例/自启注册表
+- `src-tauri/src/pwa.rs` — 浏览器 PWA 子系统：窗口级 PWA 检测（AUMID COM / PEB 命令行）、crx/AppX 分组、显示名解析
 - `src-tauri/src/config.rs` — `config.json` 结构、加载迁移、校验、**原子保存**
 - `src/main.js` / `i18n.js` / `index.html` / `styles.css` — 覆盖层与设置页前端
 - 配置与日志：`%APPDATA%\WinHop\`（config.json、winhop.log）

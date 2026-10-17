@@ -1,5 +1,6 @@
 mod config;
 mod hotkey_capture;
+mod pwa;
 mod settings;
 mod update;
 mod windows;

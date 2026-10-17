@@ -29,7 +29,7 @@ WebView JS keydown ─invoke("key")─┘        (lib.rs)                       
 ```
 
 - **状态机全在 Rust**（`src-tauri/src/lib.rs`）：`OverlayState`（阶段 `Closed/Programs/Windows`、程序列表、窗口列表、筛选缓冲、选中项、待激活 `pending`、MRU 等）。核心是**纯函数** `OverlayState::transition(msg, &cfg, &mut mru, now, overlay_hwnd, is_visible) -> Effect`——只改自身状态、返回 `Effect{None,Emit,Close,ActivateWindow,Launch}`（`Launch` = 选中已配置但未运行的程序时，经 `launch_path` 交给驱动层 ShellExecute 启动并关闭覆盖层），不碰 Tauri/锁，可直接单测。薄驱动 `handle_key`/`pick_program` 拿锁、clone 一份 cfg 快照调 transition，再由 `apply_effect` 落地（emit/close/轮询激活/启动程序）。前端只渲染 `Render` 结构、回传按键/点击。
-- **Win32 层**（`src-tauri/src/windows.rs`）：窗口枚举、激活、鼠标钩子、DWM 缩略图、语言/提权/单实例/自启注册表/日志/`open_url`（默认浏览器打开链接，限 `https://`；设置页关于区 GitHub 仓库引导）。
+- **Win32 层**（`src-tauri/src/windows.rs`）：窗口枚举、激活、鼠标钩子、DWM 缩略图、语言/提权/单实例/自启注册表/日志/`open_url`（默认浏览器打开链接，限 `https://`；设置页关于区 GitHub 仓库引导）。**PWA 子系统**（`src-tauri/src/pwa.rs`，自 windows.rs 拆出）：窗口级 PWA 检测（`window_aumid` COM 属性存储 / `process_command_line` PEB 读命令行）、crx/AppX 分组分类（`classify_pwa`）、宿主浏览器名单（`is_chromium_host`）、显示名解析（crx 走 Chrome/Edge profile 快捷方式名，AppX 走注册表 + 包清单）；枚举侧经 `windows.rs` 引用，对外仍 re-export `PWA_PROC_PREFIX`/`pwa_app_name`。
 - **配置层**（`src-tauri/src/config.rs`）：`config.json` 加载、迁移、校验、原子保存。
 - **设置页**（`src-tauri/src/settings.rs`）：`get_settings`/`save_settings` 命令、设置 DTO、changelog、热键注册与自启副作用；**热键录制**（`src-tauri/src/hotkey_capture.rs`）：`GetAsyncKeyState` 轮询检测组合键（绕开 IME 吞事件），自包含不依赖状态机；**检查更新**（`src-tauri/src/update.rs`）：`check_update` **async 命令**（ureq 网络请求放 `spawn_blocking`——同步命令会在主线程执行，网络挂起 10s 会阻塞 WebView IPC 与鼠标 LL 钩子，实测进设置页后鼠标卡顿数秒）查询 GitHub Releases API（`releases/latest`，ureq 10s 超时，尊重代理环境变量），语义化版本比较（容忍 v 前缀与 -beta/+build 后缀）后返回 `{current, latest, has_update, url}`；设置页打开时静默自动检查一次（失败不打扰）+ 手动按钮，发现新版时状态行变为可点击链接打开发布页（`open_url`，浏览器自行处理代理），不做应用内下载/安装。关于区信息架构：版本行（`WinHop X.Y.Z · 日期` + 检查按钮）→ 状态行 → GitHub 文字链接 → 更新记录（版本号只在版本行出现一次）。
 - 状态查询用原子量（`visible`、`prev_fg`），共享状态用 `Mutex`；transition 不持锁（驱动层一次性 clone cfg 快照、在锁内取 `&mut mru`），调 `close()` 等会重入取 overlay 锁的路径前先 `drop(ov)`。
@@ -92,7 +92,7 @@ Chrome/Edge 把「安装成应用」的网站（PWA）窗口与普通标签页�
 
 取名都失败时回退该 PWA 窗口标题（PWA 标题即应用名），再退 `PWA <key>`。前端程序行副标题对 `pwa#` 键只显示 `PWA`，不泄露内部 id/PFN。
 
-**覆盖面**：宿主名单见 `windows::is_chromium_host`（chrome / msedge / brave / vivaldi / opera / chromium / arc）——名单内浏览器逐窗口检测 crx PWA。Chrome、新 Edge(AppX)、旧 Edge(crx) 全覆盖并自动取名；Brave/Vivaldi/Opera/Arc 等 crx 检测/分组/激活同源可用，但取名只扫 Chrome/Edge 的 User Data，其余回退窗口标题。Firefox 无窗口化 PWA 支持（SSB 已移除），普通 firefox.exe 窗口无独立 AUMID，无法区分，不在覆盖内。
+**覆盖面**：宿主名单见 `pwa::is_chromium_host`（chrome / msedge / brave / vivaldi / opera / chromium / arc）——名单内浏览器逐窗口检测 crx PWA。Chrome、新 Edge(AppX)、旧 Edge(crx) 全覆盖并自动取名；Brave/Vivaldi/Opera/Arc 等 crx 检测/分组/激活同源可用，但取名只扫 Chrome/Edge 的 User Data，其余回退窗口标题。Firefox 无窗口化 PWA 支持（SSB 已移除），普通 firefox.exe 窗口无独立 AUMID，无法区分，不在覆盖内。
 
 ### 匹配
 

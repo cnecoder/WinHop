@@ -18,7 +18,7 @@
 ## 工程
 
 - [ ] **集成测试**：窗口枚举/激活依赖 Win32 桌面会话，需集成测试环境（现有单测覆盖配置校验/序列化、状态机筛选排序、版本资源，见 `cargo test`）
-- [ ] **windows.rs 模块拆分**：2119 行承载枚举/激活/钩子/DWM/PWA/图标/注册表/日志等职责；PWA 子系统（AUMID/PEB/AppX/lnk 约 700 行）边界清晰可拆 `pwa.rs`，`HookMsg` 可上移。纯组织性改动、无行为收益，待下次功能迭代时一并做
+- [x] **windows.rs 模块拆分（PWA 子系统）**：PWA 检测/分组/取名（约 450 行 + 5 个测试）已拆至 `src-tauri/src/pwa.rs`（windows.rs 2119 → 1597 行）；`PWA_PROC_PREFIX`/`pwa_app_name` 经 windows.rs re-export 保持 lib.rs 引用不变；`to_wide` 改 `pub(crate)` 共享。行为零变化（52 项测试不变通过）。`HookMsg` 仍在 windows.rs（状态机与钩子紧密耦合，未动）
 
 ## 代码 review 发现（2026-10-17）
 
