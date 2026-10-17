@@ -27,17 +27,15 @@ struct ChangelogEntry {
 
 // 当前版本的更新记录（设置页只显示当前版本，按界面语言取中/英文）
 const CURRENT_CHANGELOG: ChangelogEntry = ChangelogEntry {
-    version: "0.4.1",
+    version: "0.4.2",
     date: "2026-10-17",
     notes_zh: &[
-        "设置页新增「检查更新」：查询 GitHub 最新版本，发现新版可直接前往下载；打开设置页时也会静默检查一次",
-        "关于区重新布局：版本号、发布日期、更新状态一行展示，GitHub 与检查更新改为等尺寸按钮",
-        "设置页不再显示「退出」按钮（托盘右键菜单仍可退出）和更新记录（改由 GitHub Releases 承载）",
+        "已配置但未运行的程序现在可以直接启动：选中（回车 / 点击 / 代号）即打开，无需回桌面找图标；设置页可切回「仅切换」",
+        "修复每页卡片数被算小的问题：启动初期窗口尚未全屏时的测量会让「每页卡片数」偏小（如设 21 只显示 16），现已等窗口就绪后再计算",
     ],
     notes_en: &[
-        "Settings now has a Check for updates button: it queries the latest GitHub release and links straight to the download, and also checks silently when Settings opens",
-        "The About section is now a single line — version, release date and update status — with equal-sized GitHub and Check for updates buttons",
-        "The Quit button and the in-app changelog are gone from Settings (quit from the tray menu; release notes live on GitHub Releases)",
+        "Configured but not-running programs can now be launched on select (Enter / click / code) — no need to hunt for the icon; switch back to Switch only in Settings",
+        "Fixed the per-page card count being clamped too small at startup (e.g. 21 set but only 16 shown); the measurement now waits until the window is fullscreen",
     ],
 };
 
