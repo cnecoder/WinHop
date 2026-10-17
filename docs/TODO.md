@@ -27,7 +27,7 @@
 - [x] **注释滞后修正**：lib.rs `Render.anim_close_ms` 引用已删除的 `CLOSE_ANIM_MS_SWITCH`；main.js 关闭淡出注释「切换类 100ms」（已改瞬时）；main.js `applyBg(info.overlay_bg || "translucent")` 回退值（translucent 已移除）；settings.rs / lib.rs `overlay_bg` 注释仍含 translucent
 - [x] **`hotkey_capture_start` 防重复线程**：连续调用会 spawn 多个轮询线程（30ms 轮询窗口内旧线程未退出即重复）——加代际号（generation），旧线程按代际退出；前端 `startHotkeyCapture` 加 `hkListening` 防重入（原实现重复点击还会叠加 poll 定时器）
 - [x] **`close_impl` 合并两次 cfg 锁**：算 `anim_ms` 与构造 `Render::closed` 各取一次锁，合并为一次（消除两锁之间配置变化的理论窗口）
-- [ ] **`config::validate` 非法代号 panic 的权衡**（待决策）：release 下用户表现为无提示闪退；可改「跳过条目 + 日志/托盘提示」，但会削弱「配置错误启动即暴露」的设计意图，需用户拍板
+- [x] **`config::validate` 非法代号不再无提示闪退**：`validate` 改返回 `Result`，`read_cfg` 汇成带路径与原因的 panic；`run()` 开头装 panic hook，弹原生错误窗（`MessageBoxW`，release 无控制台/webview 未建立时的唯一可见出口），文案含错误详情、配置文件位置与删除重建指引（覆盖 JSON 解析失败等一切启动期 panic）
 - [ ] **`activate()` 的 `SPIF_SENDCHANGE`**（待实测）：前后两次 `SPI_SETFOREGROUNDLOCKTIMEOUT` 均带该标志，每次切换全局广播两次 `WM_SETTINGCHANGE`；多数实现不带也能生效，需实机验证激活行为后决定是否去掉
 - [~] **`match_score`/`view_indices` 每键重复计算**（评估后不做）：每次按键对每条目 to_lowercase ×3 + 全量排序；程序数 <100 时开销微秒级，预计算增加 `ProgEntry` 字段与维护成本，不值——真出现性能问题再按呼出时缓存小写副本处理
 

@@ -1620,6 +1620,27 @@ fn quit_flag_path() -> std::path::PathBuf {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     windows::redirect_stderr_to_file();
+    // panic hook：release 无控制台（windows_subsystem=windows）、启动早期 webview 也
+    // 未建立——任何 panic（最典型是配置文件损坏/校验失败）原本表现为无提示闪退。
+    // 弹原生 MessageBox 把错误原因告知用户后再走原退出流程；debug 下同时保留 stderr 输出。
+    std::panic::set_hook(Box::new(|info| {
+        let msg = if let Some(s) = info.payload().downcast_ref::<&str>() {
+            (*s).to_string()
+        } else if let Some(s) = info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "未知错误（无详细信息）".to_string()
+        };
+        let loc = info
+            .location()
+            .map(|l| format!("（位于 {}:{}）", l.file(), l.line()))
+            .unwrap_or_default();
+        eprintln!("[winhop] panic: {}{}", msg, loc);
+        windows::fatal_message_box(
+            "WinHop",
+            &format!("WinHop 遇到错误，即将退出：\n\n{}{}\n\n若是配置问题：配置文件位于\n%APPDATA%\\WinHop\\config.json，修复困难可删除该文件，下次启动将生成默认配置。", msg, loc),
+        );
+    }));
     eprintln!("=== winhop start ===");
     // 清理上次安装器遗留的退出标记：安装失败/中断时可能残留 quit.flag，
     // 不清理会导致本次启动被看门狗立即退出

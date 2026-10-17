@@ -555,6 +555,25 @@ fn thread_id() -> u32 {
     unsafe { GetCurrentThreadId() }
 }
 
+// 原生错误弹窗（MessageBoxW，阻塞至用户点确定）。用途：启动期 panic（配置损坏/
+// 校验失败等）——此时 webview 尚未建立、release 无控制台（windows_subsystem=windows），
+// 这是用户能看到错误的唯一出口。
+pub fn fatal_message_box(title: &str, text: &str) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        MessageBoxW, MB_ICONERROR, MB_OK, MB_SETFOREGROUND, MB_TOPMOST,
+    };
+    let wide_title: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
+    let wide_text: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe {
+        MessageBoxW(
+            std::ptr::null_mut(),
+            wide_text.as_ptr(),
+            wide_title.as_ptr(),
+            MB_ICONERROR | MB_OK | MB_SETFOREGROUND | MB_TOPMOST,
+        );
+    }
+}
+
 // 只装鼠标 LL 钩子（点击覆盖层外部关闭）。
 // 键盘不走 LL 钩子：Chromium 前台用 raw input 收键盘，LL 键盘钩子完全看不见按键
 //（实测：Edge/Chrome 前台钩子静默，notepad 前台正常）。热键走 RegisterHotKey

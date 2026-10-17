@@ -279,13 +279,16 @@ pub struct Program {
     pub path: String,
 }
 
-// 读取并规范化某个路径下的配置文件（解析失败即 panic，不静默）
+// 读取并规范化某个路径下的配置文件（解析/校验失败 panic，带路径与原因——
+// 由 run() 装的 panic hook 弹原生错误窗告知用户，不静默闪退）
 fn read_cfg(path: &std::path::Path) -> Config {
     let text =
         std::fs::read_to_string(path).unwrap_or_else(|e| panic!("读取 {} 失败: {}", path.display(), e));
     let mut cfg: Config = serde_json::from_str(&text)
-        .unwrap_or_else(|e| panic!("解析 {} 失败: {}", path.display(), e));
-    validate(&mut cfg);
+        .unwrap_or_else(|e| panic!("解析 {} 失败: {}\n\n常见原因：JSON 语法错误（多余/缺失逗号、引号不配对）。修复困难可删除该文件，下次启动将生成默认配置。", path.display(), e));
+    if let Err(e) = validate(&mut cfg) {
+        panic!("{}\n\n配置文件：{}", e, path.display());
+    }
     // 枚举结果统一小写，配置键名/进程名同样归一化，避免大小写不匹配
     for p in &mut cfg.programs {
         p.process = p.process.to_lowercase();
@@ -486,7 +489,8 @@ fn default_programs() -> Vec<Program> {
 /// 已知主题 id（与前端 styles.css 的 [data-theme=...] 对应）
 pub const THEMES: &[&str] = &["black-green", "black-yellow"];
 
-fn validate(cfg: &mut Config) {
+// 校验配置；错误返回文案（read_cfg 补上配置文件路径后 panic → panic hook 弹窗）
+fn validate(cfg: &mut Config) -> Result<(), String> {
     // window_order / win_digit_mode 为枚举，反序列化时非法值已回退默认（见其 Deserialize）
     if !THEMES.contains(&cfg.theme.as_str()) {
         eprintln!(
@@ -501,7 +505,7 @@ fn validate(cfg: &mut Config) {
         eprintln!("[winhop] 配置 lang 无效「{}」，回退为跟随系统", cfg.lang);
         cfg.lang = String::new();
     }
-    // 每页卡片数：超界钳制到 [MIN, MAX]（非法不 panic，避免手改 config 起不来）
+    // 每页卡片数：超界钳制到 [MIN, MAX]（非法不报错，避免手改 config 起不来）
     if (PROG_PAGE_SIZE_MIN..=PROG_PAGE_SIZE_MAX).contains(&cfg.prog_page_size) == false {
         eprintln!(
             "[winhop] 配置 prog_page_size 无效「{}」，钳制到 {}..={}",
@@ -515,22 +519,29 @@ fn validate(cfg: &mut Config) {
         // key：可为空（仅用多字母），非空则必须单小写字母且唯一
         if !p.key.is_empty() {
             if p.key.len() != 1 || !p.key.as_bytes()[0].is_ascii_lowercase() {
-                panic!("程序「{}」的单字母代号必须是单个小写字母，当前为 {:?}", p.name, p.key);
+                return Err(format!(
+                    "程序「{}」的单字母代号必须是单个小写字母，当前为 {:?}",
+                    p.name, p.key
+                ));
             }
             if !seen_key.insert(p.key.clone()) {
-                panic!("单字母代号重复: {}", p.key);
+                return Err(format!("单字母代号重复: {}", p.key));
             }
         }
         // multi_key：可为空（仅用单字母），非空则全小写字母且唯一
         if !p.multi_key.is_empty() {
             if !p.multi_key.bytes().all(|b| b.is_ascii_lowercase()) {
-                panic!("程序「{}」的多字母代号必须全为小写字母，当前为 {:?}", p.name, p.multi_key);
+                return Err(format!(
+                    "程序「{}」的多字母代号必须全为小写字母，当前为 {:?}",
+                    p.name, p.multi_key
+                ));
             }
             if !seen_mk.insert(p.multi_key.clone()) {
-                panic!("多字母代号重复: {}", p.multi_key);
+                return Err(format!("多字母代号重复: {}", p.multi_key));
             }
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -558,7 +569,7 @@ mod tests {
             prog("c", "ch", "Chrome", "chrome.exe"),
             prog("v", "vs", "Code", "code.exe"),
         ];
-        validate(&mut cfg); // 不应 panic
+        validate(&mut cfg).expect("合法配置不应报错"); // 不应报错
     }
 
     #[test]
@@ -579,34 +590,34 @@ mod tests {
     }
 
     #[test]
-    fn empty_and_duplicate_keys_panic() {
-        // 空 key 允许（仅多字母程序）；重复单字母 panic
+    fn empty_and_duplicate_keys_rejected() {
+        // 空 key 允许（仅多字母程序）；重复单字母报错
         let mut cfg = minimal_cfg();
         cfg.programs = vec![prog("", "ch", "A", "a.exe")];
-        validate(&mut cfg); // 空 key 合法
+        validate(&mut cfg).expect("空 key 合法");
 
         cfg.programs = vec![prog("c", "", "A", "a.exe"), prog("c", "", "B", "b.exe")];
-        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| validate(&mut cfg))).is_err());
+        assert!(validate(&mut cfg).is_err());
     }
 
     #[test]
-    fn invalid_single_key_panics() {
+    fn invalid_single_key_rejected() {
         let mut cfg = minimal_cfg();
         cfg.programs = vec![prog("cd", "", "A", "a.exe")]; // 单字母模式代号多字符
-        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| validate(&mut cfg))).is_err());
+        assert!(validate(&mut cfg).is_err());
 
         cfg.programs = vec![prog("C", "", "A", "a.exe")]; // 大写
-        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| validate(&mut cfg))).is_err());
+        assert!(validate(&mut cfg).is_err());
     }
 
     #[test]
-    fn duplicate_or_invalid_multi_key_panics() {
+    fn duplicate_or_invalid_multi_key_rejected() {
         let mut cfg = minimal_cfg();
         cfg.programs = vec![prog("", "ch", "A", "a.exe"), prog("", "ch", "B", "b.exe")];
-        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| validate(&mut cfg))).is_err());
+        assert!(validate(&mut cfg).is_err());
 
         cfg.programs = vec![prog("", "CH", "A", "a.exe")]; // 大写
-        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| validate(&mut cfg))).is_err());
+        assert!(validate(&mut cfg).is_err());
     }
 
     #[test]

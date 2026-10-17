@@ -199,7 +199,7 @@ MRU 在经 WinHop 切换、呼出时记录前台、以及看门狗线程检测�
 
 ### 校验与保存
 
-- 加载时归一化（进程名/代号小写）、去重黑名单；`window_order`/`theme`/`win_digit_mode`/`lang`/`overlay_bg` 非法值回退默认；`prog_page_size` 越界（非 8–64）记 eprintln 并钳制到边界，不 panic（该值只是偏好，屏幕可行性运行时再钳）；`key` 非单小写字母或重复、`multi_key` 非法或重复 → **panic**（配置错误启动即暴露，不静默）。
+- 加载时归一化（进程名/代号小写）、去重黑名单；`window_order`/`theme`/`win_digit_mode`/`lang`/`overlay_bg` 非法值回退默认；`prog_page_size` 越界（非 8–64）记 eprintln 并钳制到边界，不 panic（该值只是偏好，屏幕可行性运行时再钳）；`key` 非单小写字母或重复、`multi_key` 非法或重复 → **报错退出**：`validate` 返回 `Result`，`read_cfg` 汇成带配置文件路径与原因的 panic，由 `run()` 开头装的 **panic hook 弹原生错误窗**（`MessageBoxW`，`windows::fatal_message_box`）——release 无控制台、webview 未建立，这是用户能看到错误的唯一出口；弹窗文案附配置文件位置与「删除后重生成默认配置」的指引。JSON 解析失败同样经此路径（错误含 serde 行列号）。
 - **原子保存**：写 `config.json.tmp` 再 `rename`，防写坏导致下次起不来。
 - UI 内修改（✎ 编辑/删除、屏蔽、设置页保存）即时落盘并 `rebuild_and_emit`/`refresh_overlay` 刷新覆盖层；直接改文件需重启。
 
