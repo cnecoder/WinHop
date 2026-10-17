@@ -4,11 +4,14 @@
 //! 本子系统自包含：不依赖 Inner/状态机，仅通过命令与前端交互（start/poll/stop）。
 
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 static CAPTURE: OnceLock<Mutex<Option<String>>> = OnceLock::new();
 static CAPTURE_ON: AtomicBool = AtomicBool::new(false);
+/// 轮询线程代际：start/stop 各自递增，旧线程发现代际不符即退出——
+/// 防止快速 start/stop/start 时，sleep 中的旧线程醒来误入新一轮轮询
+static CAPTURE_GEN: AtomicU64 = AtomicU64::new(0);
 
 // (虚拟键码, 组合串名)。左右 Ctrl 归一为 ctrl。
 const VK_MODS: [(i32, &'static str); 6] = [
@@ -65,15 +68,17 @@ fn capture_hit(mods: &[&'static str], vk: i32) -> bool {
     false
 }
 
-// 开始检测：后台线程轮询，主键「按下沿」+ 修饰键按住 → 记录组合，一次后停止
+// 开始检测：后台线程轮询，主键「按下沿」+ 修饰键按住 → 记录组合，一次后停止。
+// 重复调用（前端连点录制按钮）不叠加线程：旧线程按代际退出，仅最新一轮在跑
 #[tauri::command]
 pub(crate) fn hotkey_capture_start() {
     CAPTURE.get_or_init(|| Mutex::new(None));
-    CAPTURE_ON.store(true, Ordering::Relaxed);
-    std::thread::spawn(|| {
+    let gen = CAPTURE_GEN.fetch_add(1, Ordering::SeqCst) + 1;
+    CAPTURE_ON.store(true, Ordering::SeqCst);
+    std::thread::spawn(move || {
         let mut prev: HashSet<i32> = HashSet::new();
         let mut prev_mods: Vec<&'static str> = Vec::new();
-        while CAPTURE_ON.load(Ordering::Relaxed) {
+        while CAPTURE_ON.load(Ordering::Relaxed) && CAPTURE_GEN.load(Ordering::SeqCst) == gen {
             let mods = mods_down();
             let mut now: HashSet<i32> = HashSet::new();
             for vk in 0x41..=0x5A {
@@ -124,6 +129,7 @@ pub(crate) fn hotkey_capture_poll() -> Option<String> {
 
 #[tauri::command]
 pub(crate) fn hotkey_capture_stop() {
+    CAPTURE_GEN.fetch_add(1, Ordering::SeqCst); // 让 sleep 中的旧线程立即失效
     CAPTURE_ON.store(false, Ordering::Relaxed);
     if let Some(m) = CAPTURE.get() {
         *m.lock().unwrap() = None;

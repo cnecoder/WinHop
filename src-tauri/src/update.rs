@@ -47,7 +47,11 @@ fn fetch_latest() -> Result<(String, String), String> {
         .set("User-Agent", "WinHop-Update-Check")
         .set("Accept", "application/vnd.github+json")
         .call()
-        .map_err(|e| format!("网络请求失败: {}", e))?
+        .map_err(|e| {
+            // 静默检查（设置页打开时）失败原本完全无痕迹，排查卡顿问题时留一条日志
+            eprintln!("[winhop] 检查更新请求失败: {}（10s 超时内不影响使用）", e);
+            format!("网络请求失败: {}", e)
+        })?
         .into_string()
         .map_err(|e| format!("读取响应失败: {}", e))?;
     let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("解析响应失败: {}", e))?;
@@ -80,10 +84,15 @@ pub fn check() -> Result<UpdateInfo, String> {
     })
 }
 
-/// 设置页「检查更新」命令（阻塞 HTTP，命令线程执行不阻塞 UI；10s 超时）
+/// 设置页「检查更新」命令。必须 async：ureq 同步请求最长挂 10s（网络不通时），
+/// 若以同步命令在主线程执行，会阻塞 WebView IPC 与鼠标 LL 钩子（钩子装在主线程）——
+/// 实测表现为进设置页后鼠标卡顿数秒、期间点击误判为「点击外部」。
+/// 网络 IO 放 spawn_blocking 线程池，主线程只 await 结果。
 #[tauri::command]
-pub fn check_update() -> Result<UpdateInfo, String> {
-    check()
+pub async fn check_update() -> Result<UpdateInfo, String> {
+    tauri::async_runtime::spawn_blocking(check)
+        .await
+        .map_err(|e| format!("检查更新任务失败: {}", e))?
 }
 
 #[cfg(test)]

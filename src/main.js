@@ -420,6 +420,7 @@ function renderHotkey() {
 }
 
 function startHotkeyCapture() {
+  if (hkListening) return; // 录制中重复点击：不重启检测、不叠加 poll 定时器
   hkListening = true;
   hotkeyDisplay.classList.add("listening");
   hotkeyDisplay.classList.remove("err");
@@ -527,6 +528,14 @@ function renderHeader(s) {
 // 覆盖层夺焦后按键落在本 webview 内部（raw input 内部可达），路由给 Rust 状态机。
 // LL 键盘钩子对 Chromium 前台无效（raw input 绕过钩子链），这是唯一的按键路径。
 window.addEventListener("keydown", (e) => {
+  // WebView2 是 Chromium：Ctrl+R/F5/F12/Ctrl+F 等浏览器快捷键的默认行为会重载或
+  // 干扰页面——实测录制热键时按 Ctrl+R 导致页面重载：Rust 侧热键仍 suspend、
+  // 前端状态全丢，表现为「闪退且不再响应」。输入框放行（保留复制粘贴）；
+  // 纯按键（方向键/空格，设置页 radio 键盘操作用）不受影响。
+  const inEditor = e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA";
+  if (!inEditor && (e.ctrlKey || e.metaKey || e.altKey || e.key === "F5" || e.key === "F12")) {
+    e.preventDefault();
+  }
   // 设置页按键独立处理
   if (settingsOpen) {
     if (hkListening) {
@@ -541,7 +550,8 @@ window.addEventListener("keydown", (e) => {
         endHotkeyCapture();
         return;
       }
-      // 其余按键不拦截，交给 Rust 轮询检测
+      // 其余按键不路由（检测走 Rust GetAsyncKeyState 轮询）；浏览器默认行为
+      // 已在入口对带修饰键组合统一 preventDefault，防止 Ctrl+R 之类重载页面
       return;
     }
     if (e.key === "Escape") {
@@ -1069,7 +1079,7 @@ function render(s) {
     confirmMask.hidden = true;
     lastPhase = null; // 下次渲染即「重新呼出」首帧
     if (animMs > 0) {
-      // 关闭淡出（切换类 100ms / 退出类 200ms，后端下发时长）：窗口此时仍由 Rust
+      // 关闭淡出（仅退出类 200ms，后端下发时长；切换类一律瞬时）：窗口此时仍由 Rust
       // 保持显示且保持焦点（激活推迟到动画结束后，避免「可见但已失焦」的全屏窗口
       // 析出伪影），动画完成后回执 overlay_hidden 让 Rust hide+激活目标。
       // 若期间收到 visible=true（快速重呼）会被取消。
@@ -1210,11 +1220,15 @@ invoke("get_settings")
     currentHotkey = info.hotkey || "ctrl+space";
     const saved = info.lang_cfg || ""; // 空 = 跟随系统
     applyLanguage(saved || "system");
-    applyBg(info.overlay_bg || "translucent");
+    applyBg(info.overlay_bg || "solid");
   })
   .catch(() => applyLanguage("system"));
 
 listen("overlay", (e) => render(e.payload));
+
+// 页面（重）加载后的状态对齐：Rust 侧若仍处于热键 suspend 或覆盖层可见，
+// 归零处理（恢复热键 / 关闭覆盖层）。正常启动时两者皆否，调用无副作用。
+invoke("frontend_resync").catch(() => {});
 
 // 图标：Rust 后台提取完成后补发（首呼出晚于首次渲染），合并缓存并回填已渲染行
 listen("icons", (e) => {

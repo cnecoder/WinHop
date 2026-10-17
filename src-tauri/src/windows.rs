@@ -706,7 +706,7 @@ unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
     // - crx（Chrome 等）：AUMID "<宿主>._crx_<id>"，跨进程读可能截断 → 优先进程命令行
     //   --app-id 补全完整 32 位 id，缺失再回退 AUMID 后缀（仍独立成组）。
     // - AppX（新版 Edge）：AUMID "<PFN>!App"，宿主进程命令行裸空，直接以 PFN 为键。
-    if matches!(process.as_str(), "chrome.exe" | "msedge.exe") {
+    if is_chromium_host(&process) {
         if let Some(aumid) = window_aumid(hwnd) {
             let is_crx = aumid.contains("._crx_");
             if let Some(mut key) = classify_pwa(&aumid, &process) {
@@ -740,6 +740,23 @@ fn window_title(hwnd: HWND) -> String {
     let mut buf = [0u16; 512];
     let len = unsafe { GetWindowTextW(hwnd, buf.as_mut_ptr(), buf.len() as i32) };
     String::from_utf16_lossy(&buf[..len.max(0) as usize])
+}
+
+// 逐窗口做 PWA 判定的宿主浏览器名单。crx 形态的 AUMID 结构 "<宿主>._crx_<id>" 全系
+// Chromium 同源，classify_pwa 靠 ._crx_ 标记识别、不依赖具体浏览器名；AppX !App 形态
+// 仅新版 Edge 有，已在 classify_pwa 内限定 exe。未列出的浏览器窗口按普通程序分组，
+// 不列举就不会误伤。取名只扫 Chrome/Edge 的 User Data，其余浏览器 PWA 回退窗口标题。
+fn is_chromium_host(exe: &str) -> bool {
+    matches!(
+        exe,
+        "chrome.exe"
+            | "msedge.exe"
+            | "brave.exe"
+            | "vivaldi.exe"
+            | "opera.exe"
+            | "chromium.exe"
+            | "arc.exe"
+    )
 }
 
 // 返回 (小写 exe 文件名, 完整 exe 路径)
@@ -2072,6 +2089,17 @@ mod tests {
         assert_eq!(classify_pwa("whatever!App", "chrome.exe"), None);
         // crx 后缀为空不命中
         assert_eq!(classify_pwa("Chrome._crx_", "chrome.exe"), None);
+    }
+
+    #[test]
+    fn chromium_host_whitelist_covers_browsers_only() {
+        for exe in ["chrome.exe", "msedge.exe", "brave.exe", "vivaldi.exe", "opera.exe", "chromium.exe", "arc.exe"] {
+            assert!(is_chromium_host(exe), "{} 应在宿主名单", exe);
+        }
+        // 非浏览器 / 相近名不误伤
+        for exe in ["firefox.exe", "notepad.exe", "chrome.exe.old", "mychrome.exe", ""] {
+            assert!(!is_chromium_host(exe), "{} 不应在宿主名单", exe);
+        }
     }
 
     #[test]

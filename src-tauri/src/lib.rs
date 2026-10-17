@@ -162,7 +162,7 @@ struct Render {
     page_count: usize,
     /// 多字母模式窗口层：已输入的窗口索引（数字串），用于提示；Enter 确认
     win_digit: String,
-    /// 关闭淡出时长（ms）：0=瞬时；切换类用 CLOSE_ANIM_MS_SWITCH、退出类用 CLOSE_ANIM_MS_DISMISS
+    /// 关闭淡出时长（ms）：0=瞬时；仅退出类用 CLOSE_ANIM_MS_DISMISS（切换类恒 0）
     anim_close_ms: u32,
 }
 
@@ -775,7 +775,7 @@ fn build_prog_list(
                 .to_string();
             path.as_deref()
                 .filter(|p| !p.is_empty())
-                .and_then(windows::file_description)
+                .and_then(cached_file_description)
                 .unwrap_or(stem)
         };
         list.push(ProgEntry {
@@ -819,6 +819,31 @@ fn group_windows(cfg: &Config) -> HashMap<String, Vec<WinInfo>> {
 // pwa#<id>，对应窗口 path 为宿主浏览器 exe → 自然取到宿主浏览器图标。
 // Option 包一层：HashMap::new 非 const，static 装配沿用 windows::THUMBS 同款模式
 static ICONS: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
+
+// exe 显示名缓存：小写完整路径 → FileDescription（None=无版本资源）。显示名不随运行
+// 变化，而 build_prog_list 每次呼出都会对未配置的运行中进程调 file_description（读
+// 磁盘版本资源），不缓存则呼出路径重复 IO。含负缓存（None），失败不再重试——与
+// ICONS 负缓存同一策略。进程内常驻，升级/改名属罕见场景，重启即刷新。
+static DESCRIPTIONS: Mutex<Option<HashMap<String, Option<String>>>> = Mutex::new(None);
+
+fn cached_file_description(path: &str) -> Option<String> {
+    let key = path.to_lowercase();
+    if let Some(hit) = DESCRIPTIONS
+        .lock()
+        .unwrap()
+        .get_or_insert_with(Default::default)
+        .get(&key)
+    {
+        return hit.clone();
+    }
+    let val = windows::file_description(path);
+    DESCRIPTIONS
+        .lock()
+        .unwrap()
+        .get_or_insert_with(Default::default)
+        .insert(key, val.clone());
+    val
+}
 
 // 后台提取呼出列表里缺图标的进程：SHGetFileInfoW 逐个可能命中磁盘（几十 ms 级），
 // 不能阻塞呼出路径——在独立线程跑，完成后以独立 icons 事件补发新增项（前端合并缓存，
@@ -1087,18 +1112,17 @@ fn close_impl(app: &AppHandle, restore_prev: bool) {
     // 瞬时：用户在等目标窗口弹出，实测任何可感知的淡出都显得迟钝。
     // 淡出的激活统一推迟到动画结束回执后（淡出期提前激活会让覆盖层「可见但失焦」
     // 析出伪影）；焦点丢失路径（restore_prev=false，用户已 Alt+Tab 切走）一律瞬时。
-    // close_anim 关闭 → 全部走下方瞬时路径（历史行为）。
-    let anim_ms = {
+    // close_anim 关闭 → 全部走下方瞬时路径（历史行为）。cfg 只取一次锁，
+    // anim_ms 计算与 Render::closed 共用同一快照。
+    let (anim_ms, render) = {
         let cfg = inner.cfg.lock().unwrap();
-        if !cfg.close_anim || !restore_prev || pending != 0 {
+        let anim_ms = if !cfg.close_anim || !restore_prev || pending != 0 {
             0
         } else {
             CLOSE_ANIM_MS_DISMISS
-        }
+        };
+        (anim_ms, Render::closed(&cfg, anim_ms))
     };
-    let cfg = inner.cfg.lock().unwrap();
-    let render = Render::closed(&cfg, anim_ms);
-    drop(cfg);
     if anim_ms > 0 {
         // 挂起收尾状态：hide_target 由 overlay_hidden 取用（hide + 激活）；
         // 淡出期间焦点被外部抢走（Focused(false)）会立即隐藏并清掉挂起状态，
@@ -1237,8 +1261,12 @@ async fn toggle_fullscreen(app: AppHandle) {
 
 // 设置页打开时临时注销全局热键：否则录制中按下当前热键会被系统作为 WM_HOTKEY
 // 吞掉（webview 收不到 keydown，且触发 toggle）。保存时注册新键，放弃时 hotkey_resume 恢复。
+// HOTKEY_SUSPENDED 记录挂起状态：页面（重）加载后前端状态全丢，靠 frontend_resync 恢复。
+static HOTKEY_SUSPENDED: AtomicBool = AtomicBool::new(false);
+
 #[tauri::command]
 fn hotkey_suspend(app: AppHandle) {
+    HOTKEY_SUSPENDED.store(true, Ordering::SeqCst);
     let r = app.global_shortcut().unregister_all();
     eprintln!("[winhop] hotkey_suspend unregister_all={:?}", r);
 }
@@ -1246,6 +1274,7 @@ fn hotkey_suspend(app: AppHandle) {
 // 放弃修改 / 直接返回：恢复注册配置中的（旧）热键
 #[tauri::command]
 fn hotkey_resume(app: AppHandle) -> Result<(), String> {
+    HOTKEY_SUSPENDED.store(false, Ordering::SeqCst);
     let inner = app.state::<Inner>();
     let hk = inner.cfg.lock().unwrap().hotkey.clone();
     let sc = Shortcut::from_str(&hk).map_err(|e| format!("热键「{}」无效: {}", hk, e))?;
@@ -1253,6 +1282,28 @@ fn hotkey_resume(app: AppHandle) -> Result<(), String> {
     eprintln!("[winhop] hotkey_resume {} register={:?}", hk, r);
     r.map_err(|e| format!("恢复热键失败: {}", e))?;
     Ok(())
+}
+
+// 页面（重）加载后的状态对齐。WebView 页面 reload（曾因录制中按 Ctrl+R 触发
+// Chromium 刷新快捷键，现已在 keydown 拦截）会丢掉前端全部状态，而 Rust 侧不变：
+// 热键可能仍处于 suspend（设置页打开中被重载）、覆盖层可能仍标记为可见——两种
+// 状态都会让热键「不再响应」。前端启动时调用本命令：
+// 1) suspend 中 → 恢复注册配置热键；
+// 2) 覆盖层仍可见 → 关闭归零（前端收到 visible=false 对齐，重按热键即可呼出）。
+#[tauri::command]
+fn frontend_resync(app: AppHandle) {
+    let inner = app.state::<Inner>();
+    if HOTKEY_SUSPENDED.swap(false, Ordering::SeqCst) {
+        let hk = inner.cfg.lock().unwrap().hotkey.clone();
+        if let Ok(sc) = Shortcut::from_str(&hk) {
+            let r = app.global_shortcut().register(sc);
+            eprintln!("[winhop] 页面重载恢复热键 {} register={:?}", hk, r);
+        }
+    }
+    if inner.visible.load(Ordering::Relaxed) {
+        eprintln!("[winhop] 页面重载时覆盖层仍标记可见，关闭对齐");
+        close(&app);
+    }
 }
 
 #[tauri::command]
@@ -1618,6 +1669,7 @@ pub fn run() {
             settings::save_settings,
             hotkey_suspend,
             hotkey_resume,
+            frontend_resync,
             hotkey_capture::hotkey_capture_start,
             hotkey_capture::hotkey_capture_poll,
             hotkey_capture::hotkey_capture_stop,
@@ -2297,5 +2349,20 @@ mod state_machine_tests {
         let eff = ov.transition(&HookMsg::Space, &cfg, &mut mru, 1, 0, VIS);
         assert_eq!(eff, Effect::None);
         assert_eq!(ov.pending, 0);
+    }
+
+    #[test]
+    fn cached_file_description_roundtrips_and_caches() {
+        // 系统自带 exe 应能取到显示名；大小写不同路径命中同一缓存键；重复调用结果一致
+        let p = r"C:\Windows\System32\notepad.exe";
+        let first = cached_file_description(p);
+        if first.is_none() {
+            eprintln!("SKIP: notepad.exe 无版本资源（环境差异）");
+            return;
+        }
+        let second = cached_file_description(p.to_uppercase().as_str());
+        assert_eq!(first, second, "大小写归一后应命中同一缓存");
+        let again = cached_file_description(p);
+        assert_eq!(first, again);
     }
 }

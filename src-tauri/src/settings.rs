@@ -50,7 +50,7 @@ pub(crate) struct SettingsInfo {
     win_digit_mode: String,
     /// 程序层每页卡片数（驱动卡片自适应缩放）
     prog_page_size: usize,
-    /// 覆盖层背景效果 id：solid/translucent/acrylic（显示名由前端 i18n 负责）
+    /// 覆盖层背景效果 id：solid/acrylic（显示名由前端 i18n 负责）
     overlay_bg: String,
     /// 退出类关闭是否淡出（切换类关闭始终瞬时）
     close_anim: bool,
@@ -144,7 +144,7 @@ pub(crate) struct SettingsInput {
     /// 程序层每页卡片数（范围 MIN..=MAX）
     #[serde(default)]
     pub(crate) prog_page_size: usize,
-    /// 覆盖层背景效果：solid/translucent/acrylic
+    /// 覆盖层背景效果：solid/acrylic
     #[serde(default)]
     pub(crate) overlay_bg: String,
     /// 退出类关闭淡出开关
