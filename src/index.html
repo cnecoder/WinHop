@@ -139,20 +139,19 @@
           </div>
 
           <div class="setting-section">
-            <button id="quit-btn" class="setting-row-btn" data-i18n="quit">退出 WinHop</button>
-          </div>
-
-          <div class="setting-section">
             <div class="setting-group-title" data-i18n="about">关于</div>
-            <div class="about-row">
-              <span id="about-version" class="about-version">WinHop</span>
-              <button id="check-update-btn" class="primary-btn" data-i18n="checkUpdate">检查更新</button>
+            <div class="about-card">
+              <div class="about-line">
+                <span class="about-product">WinHop <span id="about-version" class="about-version">0.4.0</span></span>
+                <span class="about-sep">·</span>
+                <span id="about-date" class="about-sub"></span>
+                <span id="update-status" class="update-status"></span>
+              </div>
+              <div class="about-actions">
+                <button id="github-btn" class="primary-btn" data-i18n="githubBtn">GitHub 仓库</button>
+                <button id="check-update-btn" class="primary-btn" data-i18n="checkUpdate">检查更新</button>
+              </div>
             </div>
-            <div id="update-status" class="update-status"></div>
-            <a id="github-link" class="text-link" href="#" data-i18n="githubLink">GitHub 仓库 · 问题反馈与下载</a>
-            <div class="about-divider"></div>
-            <div class="setting-group-title" data-i18n="changelog">更新记录</div>
-            <div id="changelog" class="changelog"></div>
           </div>
         </div>
       </div>

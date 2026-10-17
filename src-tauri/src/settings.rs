@@ -27,21 +27,17 @@ struct ChangelogEntry {
 
 // 当前版本的更新记录（设置页只显示当前版本，按界面语言取中/英文）
 const CURRENT_CHANGELOG: ChangelogEntry = ChangelogEntry {
-    version: "0.4.0",
-    date: "2026-09",
+    version: "0.4.1",
+    date: "2026-10-17",
     notes_zh: &[
-        "程序列表现在显示应用图标：运行中的程序直接显示，未运行的程序也会自动探测（运行过一次即记住路径，另支持注册表与开始菜单快捷方式解析）；PWA 显示宿主浏览器图标",
-        "背景效果可选：不透明暗色（默认）或 Acrylic 系统级毛玻璃模糊，设置页一键切换、即时预览",
-        "界面动效全面升级：呼出时程序行逐行入场、进入窗口层柔和淡入、退出类关闭短促淡出（可关闭；切换窗口类操作始终瞬时，不牺牲速度）",
-        "窗口层重新设计：16:9 缩略图恰好铺满 6 行、右侧实时预览更大、不再显示滚动条，选中窗口以「高亮行 + 实心数字徽章」清晰标示",
-        "修复若干显示问题：退出/切换时屏幕顶端不再出现白色横条，预览与缩略图边缘不再有亮线残留，列表选中高亮不再随代号长度错位",
+        "设置页新增「检查更新」：查询 GitHub 最新版本，发现新版可直接前往下载；打开设置页时也会静默检查一次",
+        "关于区重新布局：版本号、发布日期、更新状态一行展示，GitHub 与检查更新改为等尺寸按钮",
+        "设置页不再显示「退出」按钮（托盘右键菜单仍可退出）和更新记录（改由 GitHub Releases 承载）",
     ],
     notes_en: &[
-        "Program lists now show application icons: running programs directly, and not-running ones are auto-discovered too (the install path is remembered after the first run, with registry and Start Menu shortcut resolution as fallbacks); PWAs show their host browser icon",
-        "Background effects: choose between opaque dark (default) and Acrylic system-level blur, switchable in Settings with live preview",
-        "Interface animations upgraded: program rows cascade in on launch, the window layer fades in softly, and dismissals fade out briefly (optional; window switching is always instant, never slowed down)",
-        "Redesigned window layer: 16:9 thumbnails filling exactly 6 rows, a larger live preview, no scrollbars, and the selected window is clearly marked with a highlighted row plus a solid number badge",
-        "Fixed several display issues: no more white bar at the top of the screen when exiting or switching, no more bright line residue around the preview and thumbnails, and list selection no longer misaligns with variable-length codes",
+        "Settings now has a Check for updates button: it queries the latest GitHub release and links straight to the download, and also checks silently when Settings opens",
+        "The About section is now a single line — version, release date and update status — with equal-sized GitHub and Check for updates buttons",
+        "The Quit button and the in-app changelog are gone from Settings (quit from the tray menu; release notes live on GitHub Releases)",
     ],
 };
 

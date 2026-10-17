@@ -255,18 +255,14 @@ async function openSettings() {
     r.addEventListener("change", updateSettingsState);
   });
   renderBlocked(info.blocked || []);
-  // 版本行：名称 + 版本 + 发布日期（更新记录头不再重复版本号）
-  document.getElementById("about-version").textContent =
-    `WinHop ${info.version} · ${info.changelog.date}`;
+  // 关于区：产品名 + 版本号、发布日期（精确到日）、更新状态
+  document.getElementById("about-version").textContent = info.version;
+  document.getElementById("about-date").textContent =
+    t("released", { d: info.changelog.date });
   // 打开设置页时静默检查一次更新（失败不打扰）；结果经 renderUpdateStatus 显示
   invoke("check_update")
     .then((u) => renderUpdateStatus(u, true))
     .catch(() => {});
-  const e = info.changelog;
-  const notes = isEn() ? e.notes_en : e.notes_zh;
-  // 更新记录：版本号与日期已在版本行显示，此处仅列条目
-  document.getElementById("changelog").innerHTML =
-    `<ul>${notes.map((n) => `<li>${escapeHtml(n)}</li>`).join("")}</ul>`;
   // 热键：打开设置即临时注销（录制能收到组合键、且不误触 toggle）；保存时注册新键，放弃时 resume
   formHotkey = info.hotkey || "ctrl+space";
   hkListening = false;
@@ -990,10 +986,6 @@ listEl.addEventListener("mouseleave", () => {
   }
 });
 
-document.getElementById("quit-btn").addEventListener("click", () => {
-  invoke("quit_app");
-});
-
 // ===== 检查更新：设置页手动按钮 + 打开设置时静默检查；发现新版时状态行变为
 // 可点击链接（打开发布页下载）=====
 let updateUrl = "";
@@ -1038,8 +1030,7 @@ document.getElementById("check-update-btn").addEventListener("click", async () =
   }
 });
 
-document.getElementById("github-link").addEventListener("click", (e) => {
-  e.preventDefault();
+document.getElementById("github-btn").addEventListener("click", () => {
   invoke("open_url", { url: "https://github.com/cnecoder/WinHop" });
 });
 
