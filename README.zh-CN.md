@@ -21,7 +21,7 @@ Rust + Tauri 2（WebView2）· Windows 10/11 x64
 <div align="center">
   <img src="assets/promo-zh.gif" alt="WinHop 演示" width="720">
   <br>
-  <sub><a href="https://github.com/cnecoder/WinHop/raw/main/assets/promo-zh.mp4">观看完整演示视频（61 秒）</a></sub>
+  <sub><a href="https://github.com/cnecoder/WinHop/raw/main/assets/promo-zh.mp4">观看更流畅的视频版（61 秒 / 30fps）</a></sub>
 </div>
 
 ## 为什么用 WinHop

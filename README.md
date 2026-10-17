@@ -21,7 +21,7 @@ Four scenarios in action: single-letter and multi-letter modes over single-windo
 <div align="center">
   <img src="assets/promo-en.gif" alt="WinHop demo" width="720">
   <br>
-  <sub><a href="https://github.com/cnecoder/WinHop/raw/main/assets/promo-en.mp4">Watch the full 61-second demo</a></sub>
+  <sub><a href="https://github.com/cnecoder/WinHop/raw/main/assets/promo-en.mp4">Watch the smoother video version (61s / 30fps)</a></sub>
 </div>
 
 ## Why WinHop
