@@ -27,15 +27,21 @@ struct ChangelogEntry {
 
 // 当前版本的更新记录（设置页只显示当前版本，按界面语言取中/英文）
 const CURRENT_CHANGELOG: ChangelogEntry = ChangelogEntry {
-    version: "0.4.2",
+    version: "0.4.3",
     date: "2026-10-17",
     notes_zh: &[
-        "已配置但未运行的程序现在可以直接启动：选中（回车 / 点击 / 代号）即打开，无需回桌面找图标；设置页可切回「仅切换」",
-        "修复每页卡片数被算小的问题：启动初期窗口尚未全屏时的测量会让「每页卡片数」偏小（如设 21 只显示 16），现已等窗口就绪后再计算",
+        "修复录制热键时按下 Ctrl+R / F5 等浏览器快捷键导致界面异常的问题（此前会引发界面重载、热键暂时失灵）",
+        "修复打开设置页后鼠标短暂卡顿：检查更新的网络请求不再阻塞界面，网络不通时也不再等数秒才提示",
+        "配置文件损坏时弹出明确的错误窗口（含文件位置与修复指引），不再无提示退出",
+        "切换窗口更轻量：不再在每次切换时写注册表与广播系统消息",
+        "Brave / Vivaldi / Opera / Arc 等 Chromium 系浏览器安装的网站应用（PWA）现在也能独立分组显示",
     ],
     notes_en: &[
-        "Configured but not-running programs can now be launched on select (Enter / click / code) — no need to hunt for the icon; switch back to Switch only in Settings",
-        "Fixed the per-page card count being clamped too small at startup (e.g. 21 set but only 16 shown); the measurement now waits until the window is fullscreen",
+        "Fixed browser shortcuts like Ctrl+R / F5 breaking the UI while recording a hotkey (previously it reloaded the page and the hotkey stopped working until restart)",
+        "Fixed mouse briefly freezing after opening Settings: the update check no longer blocks the UI, and network failures no longer take seconds to surface",
+        "A corrupted config file now shows a clear error dialog (file location + fix guidance) instead of exiting silently",
+        "Window switching is lighter: no more registry writes and system-wide broadcasts on every switch",
+        "Web apps (PWA) installed in Brave / Vivaldi / Opera / Arc and other Chromium browsers are now grouped separately",
     ],
 };
 
