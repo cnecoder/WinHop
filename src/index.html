@@ -144,9 +144,14 @@
 
           <div class="setting-section">
             <div class="setting-group-title" data-i18n="about">关于</div>
-            <div id="version-info" class="version-info">版本 …</div>
-            <button id="github-btn" class="setting-row-btn" style="margin-top:10px" data-i18n="githubRepo">GitHub 仓库</button>
-            <div class="setting-group-title" style="margin-top:14px" data-i18n="changelog">更新记录</div>
+            <div class="about-row">
+              <span id="about-version" class="about-version">WinHop</span>
+              <button id="check-update-btn" class="primary-btn" data-i18n="checkUpdate">检查更新</button>
+            </div>
+            <div id="update-status" class="update-status"></div>
+            <a id="github-link" class="text-link" href="#" data-i18n="githubLink">GitHub 仓库 · 问题反馈与下载</a>
+            <div class="about-divider"></div>
+            <div class="setting-group-title" data-i18n="changelog">更新记录</div>
             <div id="changelog" class="changelog"></div>
           </div>
         </div>

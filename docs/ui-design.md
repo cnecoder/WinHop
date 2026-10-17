@@ -95,7 +95,7 @@ transition: background var(--dur) var(--ease);
 覆盖范围（全部已按此实现，新增按钮必须沿用）：
 - 主按钮 `.primary-btn`（设置页保存、弹窗保存）——禁用置灰
 - 头部「设置」`#settings-btn`、头部「?」帮助 `#help-btn`、行内编辑 `✎` `.edit-btn`
-- 设置页「返回」`#settings-back`、「录制」`#hotkey-btn`、「退出」`#quit-btn`、关于区「GitHub 仓库」`#github-btn`、黑名单「解除」`.blocked-unblock`
+- 设置页「返回」`#settings-back`、「录制」`#hotkey-btn`、「退出」`#quit-btn`、黑名单「解除」`.blocked-unblock`
 - 帮助页「返回」`#help-back`（布局与设置页同构：720px 列、accent 分组标题、`.key` 徽章 + 灰字说明行）
 - 编辑面板「保存」`.confirm-btn`、「屏蔽」`.block-btn`
 - 弹窗「保存/不保存/取消」`.confirm-buttons button`
@@ -139,6 +139,8 @@ transition: background var(--dur) var(--ease);
 - 设置分组标题 `.setting-group-title`：13px、加粗、accent、大写、字距 0.5px。
 - 页面/设置标题 18px/600；正文列表 15–16px；说明/hint 12–13px、`--dim`。
 - 弹窗 `.confirm-dialog`：surface 底、accent 半透明描边、圆角 `--r-panel`、阴影；遮罩 `rgba(bg,0.6)`。
+- **文字链接 `.text-link`**（三级动作/外链专用，如关于区 GitHub 仓库）：13px `--dim` + 细下划线（`rgba(line,0.25)`），hover 变 `--fg` 并加深下划线；**不做 amber 实心按钮**——外链是次级动作，避免与主操作抢视觉。
+- **关于区结构**：版本行 `.about-row`（`WinHop X.Y.Z · 日期` 居左 + 「检查更新」按钮居右）→ 状态行 `.update-status`（已是最新 / 发现新版时变 accent 可点击链接打开发布页 / 失败红色）→ 文字链接 → 分隔线 `.about-divider`（`rgba(line,0.08)`）→ 更新记录列表（版本号与日期只在版本行出现一次，不重复）。
 
 ### 3.7 动效
 

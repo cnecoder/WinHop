@@ -255,14 +255,18 @@ async function openSettings() {
     r.addEventListener("change", updateSettingsState);
   });
   renderBlocked(info.blocked || []);
-  document.getElementById("version-info").textContent = t("version", { v: info.version });
+  // 版本行：名称 + 版本 + 发布日期（更新记录头不再重复版本号）
+  document.getElementById("about-version").textContent =
+    `WinHop ${info.version} · ${info.changelog.date}`;
+  // 打开设置页时静默检查一次更新（失败不打扰）；结果经 renderUpdateStatus 显示
+  invoke("check_update")
+    .then((u) => renderUpdateStatus(u, true))
+    .catch(() => {});
   const e = info.changelog;
   const notes = isEn() ? e.notes_en : e.notes_zh;
+  // 更新记录：版本号与日期已在版本行显示，此处仅列条目
   document.getElementById("changelog").innerHTML =
-    `<div class="changelog-entry">
-      <div class="changelog-ver">${escapeHtml(e.version)} <span class="changelog-date">${escapeHtml(e.date)}</span></div>
-      <ul>${notes.map((n) => `<li>${escapeHtml(n)}</li>`).join("")}</ul>
-    </div>`;
+    `<ul>${notes.map((n) => `<li>${escapeHtml(n)}</li>`).join("")}</ul>`;
   // 热键：打开设置即临时注销（录制能收到组合键、且不误触 toggle）；保存时注册新键，放弃时 resume
   formHotkey = info.hotkey || "ctrl+space";
   hkListening = false;
@@ -990,7 +994,52 @@ document.getElementById("quit-btn").addEventListener("click", () => {
   invoke("quit_app");
 });
 
-document.getElementById("github-btn").addEventListener("click", () => {
+// ===== 检查更新：设置页手动按钮 + 打开设置时静默检查；发现新版时状态行变为
+// 可点击链接（打开发布页下载）=====
+let updateUrl = "";
+
+function renderUpdateStatus(u, silent) {
+  const status = document.getElementById("update-status");
+  status.classList.remove("link", "err");
+  if (u && u.has_update) {
+    status.textContent = t("updateFound", { v: u.latest });
+    status.classList.add("link");
+    updateUrl = u.url || "";
+  } else if (u) {
+    status.textContent = t("updateLatest");
+    updateUrl = "";
+  } else if (!silent) {
+    // 仅手动检查时提示失败，静默自动检查不扰民
+    status.textContent = t("updateCheckFail");
+    status.classList.add("err");
+    updateUrl = "";
+  }
+}
+
+document.getElementById("update-status").addEventListener("click", () => {
+  if (updateUrl) {
+    invoke("open_url", { url: updateUrl });
+  }
+});
+
+document.getElementById("check-update-btn").addEventListener("click", async () => {
+  const btn = document.getElementById("check-update-btn");
+  const status = document.getElementById("update-status");
+  btn.disabled = true;
+  status.textContent = t("updateChecking");
+  status.classList.remove("link", "err");
+  try {
+    const u = await invoke("check_update");
+    renderUpdateStatus(u, false);
+  } catch {
+    renderUpdateStatus(null, false);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+document.getElementById("github-link").addEventListener("click", (e) => {
+  e.preventDefault();
   invoke("open_url", { url: "https://github.com/cnecoder/WinHop" });
 });
 

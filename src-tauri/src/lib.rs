@@ -1,6 +1,7 @@
 mod config;
 mod hotkey_capture;
 mod settings;
+mod update;
 mod windows;
 
 use std::collections::HashMap;
@@ -1589,7 +1590,8 @@ pub fn run() {
             pick_program,
             set_page_size,
             set_overlay_bg,
-            overlay_hidden
+            overlay_hidden,
+            update::check_update
         ])
         .setup(move |app| {
             let visible = Arc::new(AtomicBool::new(false));
