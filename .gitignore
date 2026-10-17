@@ -35,3 +35,15 @@ target
 
 # 本地 Claude Code 设置
 /.claude/
+
+# 宣传工作台：脚本（tools/promo/*.py）入库，产物与中间帧不入库（可重新生成）
+/tools/promo/anim_frames/
+/tools/promo/render/
+/tools/promo/assets/
+/tools/promo/frames/
+/tools/promo/*.mp4
+/tools/promo/*.png
+/tools/promo/*.txt
+
+# 本地项目记忆
+/.workbuddy/

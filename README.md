@@ -4,116 +4,109 @@
 
 # WinHop
 
-Windows 窗口快速切换器
+A fast window switcher for Windows
 
-全局热键呼出全屏选择页，字母键选程序、数字键选窗口；支持单/多字母两种模式、空格在最近两个窗口间来回跳。
+Bring up a fullscreen picker with a global hotkey, pick a program with letter keys and a window with digit keys. Supports single-letter and multi-letter modes; Space jumps between your two most recent windows.
 
-Rust + Tauri 2（WebView2）· Windows 10/11 x64
+Rust + Tauri 2 (WebView2) · Windows 10/11 x64
 
-**[English](README.en.md)**
+**[中文](README.zh-CN.md)**
 
 </div>
 
-## 演示
+## Demo
 
-`t` 在 Terminal 的 2 个窗口与 `v` 在 VS Code 的 3 个窗口之间切换，以及空格快速切回上一个窗口：
+Four scenarios in action: single-letter and multi-letter modes over single-window and multi-window apps, plus Space to toggle between the two most recent windows.
 
 <div align="center">
-  <img src="assets/demo.gif" alt="WinHop 演示" width="720">
+  <a href="assets/promo-en.mp4"><img src="assets/promo-en-poster.png" alt="WinHop demo video" width="720"></a>
+  <br>
+  <sub>Click the cover to play the 60-second demo</sub>
 </div>
 
-## 为什么用 WinHop
+## Why WinHop
 
-- **纯键盘、两次按键到任意窗口**：`Ctrl+Space` 呼出，字母选程序、数字选窗口，手不离键盘
-- **只做切换、不做启动器**：列表即所见，运行中的程序按代号直达，未运行的置灰不可选，没有多余功能
-- **两层模型不迷路**：程序层 → 窗口层，多窗口程序进窗口层看缩略图 + 大预览再选
-- **代号一眼可辨**：实心亮边 = 已配置且运行，`·` 占位 = 未配置字母（鼠标可点，✎ 手动配键），灰色 = 已配置但未运行
-- **常驻轻量**：托盘常驻、单实例；提权运行可切换任务管理器等管理员窗口
-- **配置简单可靠**：纯 JSON 存用户目录，升级/重装不丢失，可直接进版本库
+- **Keyboard-only, two keystrokes to any window**: `Ctrl+Space` to open, a letter for the program, a digit for the window. Hands stay on the keyboard.
+- **Switching only, not a launcher**: the list is what you see. Running programs are reached directly by their code; non-running ones are greyed out and not selectable. No extra clutter.
+- **A two-layer model that keeps you oriented**: program layer then window layer, where multi-window programs show thumbnails plus a large preview.
+- **Codes you can read at a glance**: solid bright badge = configured and running, a `·` placeholder = no letter assigned (click to pick, use ✎ to assign one), grey = configured but not running.
+- **Lightweight and resident**: lives in the tray, single instance; runs elevated so it can switch admin windows like Task Manager.
+- **Simple, reliable config**: plain JSON in your user directory, survives upgrades/reinstalls, safe to commit to version control.
 
-## 功能特性
+## Features
 
-- **两层键位模型**：`Ctrl+Space` 呼出 → 字母键选程序（单窗口直切 / 多窗口进窗口层）→ 数字键选窗口
-- **单字母 / 多字母两种模式**（设置页切换）：
-  - 单字母：每个程序一个字母代号，一键直达
-  - 多字母：连续输入字母按代号/名称实时筛选，`Enter` 确认最佳匹配；代号可配成多字母（如 `ch`、`vs`），突破 26 个字母上限
-- **空格快速跳转**：呼出后直接按空格，切到上一个使用的窗口（两个最近窗口来回切换）
-- **程序层分页 + 卡片自适应**：每页卡片数为偏好（设置页 8–64，默认 20），实际按屏幕高度自动钳制——卡片等比缩放（0.75–1.35）始终铺满屏幕、不过大不过小；超过一页时 `PageUp/PageDown` 翻页
-- **窗口层**：编号 + 缩略图 + 大预览，方向键/悬停联动、自动滚动跟随选中
-- **统一编辑**：所有程序（无论是否已配置）都能改名、配代号，写入 `config.json` 即时生效
-- **程序图标**：程序行显示提取自 exe 的应用图标（PWA 显示宿主浏览器图标），呼出后台提取不拖慢呼出速度
-- **背景效果两档**：不透明暗色（默认）/ Acrylic 系统级毛玻璃模糊，设置页切换
-- **顺畅动效**：呼出行级联入场、程序层↔窗口层淡入切换、退出类关闭柔和淡出（切换窗口类操作始终瞬时）
-- **排序模式可选**：固定序号（按创建顺序）/ 最近使用优先
-- **双屏支持**：条目显示窗口所在屏幕标签，切换后窗口留在原屏幕
-- **管理员程序支持**：提权运行，可切换 taskmgr 等 UIPI 保护的窗口
-- **皮肤系统**：配色全部走 CSS 变量主题，设置页一键切换，内置黑绿 / 黑黄
-- **设置页**：`F2` 或点头部设置按钮进入，改动保存后生效（主题点选即预览，放弃则回退）
-- **托盘常驻**：左键唤出、右键菜单退出、单实例保护
+- **Two-layer key model**: `Ctrl+Space` to open → a letter picks a program (single window switches directly / multiple windows enter the window layer) → a digit picks a window.
+- **Single-letter / multi-letter modes** (toggle in settings):
+  - Single-letter: one letter code per program, one keystroke to reach it.
+  - Multi-letter: type letters to filter live by code/name, `Enter` confirms the best match; codes can be multi-letter (e.g. `ch`, `vs`), breaking past the 26-letter limit.
+- **Space to jump back**: press Space right after opening to switch to the previously used window (toggle between your two most recent).
+- **Pagination**: 20 programs per page, `PageUp/PageDown` to page.
+- **Window layer**: number + thumbnail + large preview, arrow keys/hover linked, auto-scroll follows the selection.
+- **Unified editing**: every program (configured or not) can be renamed and assigned a code; writes to `config.json` and takes effect immediately.
+- **Sorting options**: fixed order (by creation) / most-recently-used first.
+- **Multi-monitor**: entries show which screen a window is on; after switching, the window stays on its original screen.
+- **Admin programs**: runs elevated to switch UIPI-protected windows such as taskmgr.
+- **Themes**: all colors come from CSS-variable themes, switchable in settings; built-in black-green and black-yellow.
+- **Settings page**: open with `F2` or the header settings button; changes apply on Save (themes preview live, discarded on cancel).
+- **Tray resident**: left-click toggles the picker, right-click menu to quit, single-instance guard.
 
-## 使用方法
+## Usage
 
-### 安装
+### Install
 
-从 [GitHub Releases](https://github.com/cnecoder/WinHop/releases) 下载：
+Download from [GitHub Releases](https://github.com/cnecoder/WinHop/releases):
 
-- **WinHop_x.y.z_x64-setup.exe**（NSIS 安装包，推荐）
-- 或 **WinHop_x.y.z_x64_en-US.msi**
+- **WinHop_x.y.z_x64-setup.exe** (NSIS installer, recommended)
+- or **WinHop_x.y.z_x64_en-US.msi**
 
-要求 Windows 10/11 x64（WebView2 自带）。安装后运行，首次启动弹 UAC 提权确认（切换管理员程序必需）。
+Requires Windows 10/11 x64 (WebView2 included). On first launch a UAC prompt asks for elevation (required to switch admin programs).
 
-### 呼出与选择
+### Open and pick
 
 ```
-Ctrl+Space（默认热键，可配置）
-  → 全屏选择页列出所有程序
-    → 单字母模式：按字母代号
-    → 多字母模式：连续输入字母筛选 → Enter 确认
-        单窗口程序 → 直接切换
-        多窗口程序 → 进入窗口层
-          → 按数字 → 切换对应窗口（支持多位数字）
-          → 再按同字母 → 轮询切下一个窗口
-          → ↑↓ 移动选中 / 悬停预览 / 点击选择
-    → 空格 → 直接切到上一个窗口（最近两个窗口来回切）
-    → PageUp/PageDown 翻页（程序超过每页卡片数时，默认 20）
-    → Esc 逐层回退
-  → 再按热键 / 点击选择页外部 → 关闭
+Ctrl+Space (default hotkey, configurable)
+  → fullscreen picker lists all programs
+    → single-letter mode: press a letter code
+    → multi-letter mode: type letters to filter → Enter to confirm
+        single-window program → switches directly
+        multi-window program → enters the window layer
+          → press a digit → switch that window (multi-digit supported)
+          → press the same letter again → cycle to the next window
+          → ↑↓ to move selection / hover to preview / click to pick
+    → Space → switch to the previous window (toggle the two most recent)
+    → PageUp/PageDown to page (when more than 20 programs)
+    → Esc to step back one layer
+  → press the hotkey again / click outside the picker → close
 ```
 
-- 未运行的程序灰色显示在列表末尾，不可选（只做切换，不做启动器）
-- 未配置的运行中程序仍列出、键位显示 `·`：鼠标可点选切换，但不自动分配字母（字母只由 ✎ 手动配置；删空字母保存即清除绑定）
-- 窗口层每行：序号 + 标题 + 屏幕标签 + 小缩略图；右侧大预览跟随选中/悬停
+- Non-running programs are shown greyed out at the end and are not selectable (switcher, not launcher).
+- Running unconfigured programs are still listed with a `·` placeholder: they're clickable to switch, but no letter is auto-assigned (assign one manually with ✎; clearing the letter and saving unbinds it).
+- Each window-layer row: number + title + screen tag + small thumbnail; the large preview on the right follows selection/hover.
 
-### 编辑程序
+### Edit a program
 
-每个程序行右侧有编辑按钮（✎）：点击 → 输入代号（单字母模式为单个字母，下方显示可用字母；多字母模式为多字母代号，可留空只按名称匹配）→ 修改名称 → 保存，立即写入 `config.json`。
+Each program row has an edit button (✎) on the right: click → enter a code (a single letter in single-letter mode, with available letters shown below; a multi-letter code in multi-letter mode, or leave blank to match by name only) → change the name → Save. It is written to `config.json` immediately.
 
-面板内另有两个操作：
-- **删除**（仅已配置程序）：移除已存的名称/代号。删除后该程序未运行时不再灰色显示；运行中仍会以未配置（`·`）出现，可重新配置。
-- **屏蔽**：把程序加入黑名单，运行时也彻底从列表隐藏（设置页黑名单可解除）。适合系统后台/不想见到的程序。
+### Settings
 
-### 设置
+Press **F2** in the picker or click the header **Settings** button to open the settings page:
 
-选择页内按 **F2** 或点头部「设置」进入独立设置页：
+- **Window order**: fixed (by creation) / most-recently-used first
+- **Multi-letter mode** toggle
+- **Theme** switch
+- **Quit WinHop**
+- Current version and its release notes
 
-- **窗口排序方式**：固定序号（按创建顺序）/ 最近使用优先
-- **多字母模式**开关
-- **主题**切换（皮肤）
-- **背景效果**：不透明暗色（默认）/ Acrylic 毛玻璃
-- **关闭动画**：退出类关闭（Esc / 点击外部）柔和淡出开关（切换窗口类操作始终瞬时）
-- **退出 WinHop**
-- 当前版本号与该版本更新记录
+Changes apply only after you click **Save**; going back or pressing Esc with unsaved changes prompts you to save.
 
-改动在点「保存」后才生效；未保存就返回/按 Esc 会提示保存。
+### Tray
 
-### 托盘
+- **Left-click** the tray icon: toggle the picker
+- **Right-click**: menu with **Quit**
 
-- **左键**点击托盘图标：呼出/关闭选择页
-- **右键**：菜单「退出」
+## Configuration
 
-## 配置方法
-
-配置文件 `config.json` 位于 `%APPDATA%\WinHop\`（升级/重装不丢失）。旧版本配置（`%APPDATA%\WinTab`、exe 目录、项目根目录）首次运行自动迁移复制过来，旧文件保留。缺失时自动生成默认配置。
+The config file `config.json` lives in `%APPDATA%\WinHop\` (survives upgrades/reinstalls). Config from older versions (`%APPDATA%\WinTab`, next to the exe, or the project root) is copied over automatically on first run; old files are kept. A default config is generated when none exists.
 
 ```json
 {
@@ -129,25 +122,23 @@ Ctrl+Space（默认热键，可配置）
 }
 ```
 
-| 字段 | 说明 |
+| Field | Description |
 |---|---|
-| `hotkey` | 全局热键，格式 `修饰键+按键`：ctrl/alt/shift/win + space/esc/enter/tab/字母/数字 |
-| `elevate` | release 构建是否提权运行（切换管理员程序必需，debug 构建忽略） |
-| `window_order` | 窗口层排序：`zorder` 固定序号（创建顺序）/ `mru` 最近使用优先。设置页可改 |
-| `multi_letter` | 是否启用多字母模式（设置页可改） |
-| `theme` | 主题 id（皮肤，设置页可改）；内置 `black-green`（黑绿）、`black-yellow`（黑黄），缺省 `black-green` |
-| `overlay_bg` | 覆盖层背景效果（设置页可改）：`solid` 不透明暗色（缺省）/ `acrylic` 系统级毛玻璃模糊 |
-| `close_anim` | **退出类关闭**（Esc / 点击外部 / 再按热键）是否 ~200ms 柔和淡出，缺省 `true`；切换窗口类操作始终瞬时 |
-| `programs[]` | 程序条目：`key` 单字母代号（单个小写字母，可空）、`multi_key` 多字母代号（全小写字母，可空）、`name` 显示名、`process` exe 文件名（小写）、`path` 自动学习的 exe 完整路径（供未运行时提取图标） |
+| `hotkey` | Global hotkey, format `modifier+key`: ctrl/alt/shift/win + space/esc/enter/tab/letter/digit |
+| `elevate` | Whether the release build runs elevated (required for admin programs; ignored in debug) |
+| `window_order` | Window-layer order: `zorder` fixed (by creation) / `mru` most-recently-used first. Changeable in settings. |
+| `multi_letter` | Whether multi-letter mode is enabled (changeable in settings). |
+| `theme` | Theme id (changeable in settings); built-in `black-green` and `black-yellow`, defaults to `black-green`. |
+| `programs[]` | Program entries: `key` single-letter code (one lowercase letter, may be empty), `multi_key` multi-letter code (lowercase letters, may be empty), `name` display name, `process` exe file name (lowercase). |
 
-`key` 与 `multi_key` 各自唯一、均可为空（只用另一种模式时）。默认配置只预置常用软件的名称/进程（用于识别与友好命名），**代号一律留空**——字母只能由用户显式配置（✎ 编辑面板或设置页），出厂不代分配。运行中通过设置页或 ✎ 编辑修改会立即落盘到该文件。
+`key` and `multi_key` are each unique and may each be empty (when using only the other mode). The default config ships with two sets of codes for common software. Edits made via the settings page or ✎ are saved to this file immediately.
 
-## 赞助
+## Support
 
-WinHop 免费、开源，会一直免费下去。如果它确实帮你省了时间，你愿意的话可以请作者喝杯咖啡，这是对持续维护最大的鼓励。当然，不赞助也完全不影响使用。
+WinHop is free and open source, and it will stay that way. If it genuinely saves you time and you'd like to, you can buy the author a coffee — it's a huge encouragement to keep maintaining it. Sponsoring is entirely optional and never required to use the app.
 
 <div align="center">
-  <img src="assets/sponsor-wechat.png" alt="微信支付" width="210" />
-  <img src="assets/sponsor-alipay.png" alt="支付宝" width="210" />
-  <img src="assets/sponsor-ifdian.png" alt="爱发电" width="210" />
+  <img src="assets/sponsor-wechat.png" alt="WeChat Pay" width="210" />
+  <img src="assets/sponsor-alipay.png" alt="Alipay" width="210" />
+  <img src="assets/sponsor-ifdian.png" alt="Ifdian" width="210" />
 </div>
