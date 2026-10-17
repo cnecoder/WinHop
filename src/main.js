@@ -124,6 +124,7 @@ function readSettingsForm() {
   const wdm = document.querySelector('input[name="win-digit-mode"]:checked');
   const bg = document.querySelector('input[name="overlay-bg"]:checked');
   const ca = document.querySelector('input[name="close-anim"]:checked');
+  const lo = document.querySelector('input[name="launch-off"]:checked');
   return {
     hotkey: formHotkey,
     autostart: document.getElementById("autostart-check").checked,
@@ -133,6 +134,7 @@ function readSettingsForm() {
     win_digit_mode: wdm ? wdm.value : "jump",
     overlay_bg: bg ? bg.value : "solid",
     close_anim: ca ? ca.value === "fade" : true,
+    launch_not_running: lo ? lo.value !== "off" : true,
     prog_page_size:
       Number(document.getElementById("pagesize-value").textContent) ||
       PROG_PAGE_SIZE_DEFAULT,
@@ -170,6 +172,7 @@ async function openSettings() {
     win_digit_mode: info.win_digit_mode || "jump",
     overlay_bg: info.overlay_bg === "acrylic" ? "acrylic" : "solid",
     close_anim: info.close_anim !== false,
+    launch_not_running: info.launch_not_running !== false,
     prog_page_size: info.prog_page_size || PROG_PAGE_SIZE_DEFAULT,
     // 保存的语言选择：跟随系统=system，否则具体语言
     lang: info.lang_cfg || "system",
@@ -252,6 +255,12 @@ async function openSettings() {
   const caVal = info.close_anim === false ? "instant" : "fade";
   document.querySelectorAll('input[name="close-anim"]').forEach((r) => {
     r.checked = r.value === caVal;
+    r.addEventListener("change", updateSettingsState);
+  });
+  // 未运行程序：选中即启动 / 仅切换
+  const loVal = info.launch_not_running === false ? "off" : "on";
+  document.querySelectorAll('input[name="launch-off"]').forEach((r) => {
+    r.checked = r.value === loVal;
     r.addEventListener("change", updateSettingsState);
   });
   renderBlocked(info.blocked || []);
@@ -856,9 +865,18 @@ function rowsAvailHeight() {
 // 因此 scale 永不触顶/封底，N 行总高恰好铺满行区——不会出现卡片放到最大仍空半屏。
 function applyUiScale() {
   if (!state || !state.visible || settingsOpen || helpOpen) return;
+  // 窗口未全屏时跳过：主窗口以 720×520 隐藏创建，启动初期在此尺寸下测量会把
+  // 偏好页长钳成很小的值并永久收敛（分页随之变少，表现为「设置 21 却只显示 16 个」）。
+  // 全屏(screen.height)后的首次布局会再次进入本函数，届时再计算。
+  const screenH = window.screen
+    ? window.screen.height || window.screen.availHeight || 0
+    : 0;
+  if (window.innerHeight < 400 || (screenH && window.innerHeight < screenH - 60)) return;
   const preferred = state.prog_page_size || PROG_PAGE_SIZE_DEFAULT;
   const avail = rowsAvailHeight();
   const n = clampPageSize(preferred, avail);
+  // 卡片尺寸按「每页数量」计算（设置多少就按多少的槽位尺寸，程序不足一页时下方留空），
+  // 保证不同页/不同程序数下卡片大小稳定；窗口层同样消费该缩放。
   overlayView.style.setProperty("--ui-scale", String(cardScale(avail, n)));
   if (n !== preferred) {
     state.prog_page_size = n; // 先本地收敛，避免重发渲染前的重复 invoke

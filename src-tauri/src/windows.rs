@@ -1546,6 +1546,33 @@ pub fn open_url(url: &str) -> Result<(), String> {
     Ok(())
 }
 
+// 启动一个已配置但未运行的程序（ShellExecute "open"）。只允许 .exe，防注入其它动词/协议。
+pub fn launch_program(path: &str) -> Result<(), String> {
+    if path.is_empty() {
+        return Err("路径为空".into());
+    }
+    if !path.to_lowercase().ends_with(".exe") {
+        return Err("仅支持 .exe".into());
+    }
+    unsafe {
+        let file = to_wide(path);
+        let open = to_wide("open");
+        let empty = to_wide("");
+        let h = ShellExecuteW(
+            std::ptr::null_mut(),
+            open.as_ptr(),
+            file.as_ptr(),
+            empty.as_ptr(),
+            empty.as_ptr(),
+            1,
+        );
+        if h as isize <= 32 {
+            return Err(format!("启动失败 {:?}", h));
+        }
+    }
+    Ok(())
+}
+
 pub fn relaunch_elevated() {
     unsafe {
         let exe = std::env::current_exe().expect("获取自身路径失败");

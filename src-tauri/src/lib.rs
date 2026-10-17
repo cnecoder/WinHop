@@ -36,6 +36,8 @@ struct ProgEntry {
     multi_key: String,
     name: String,
     process: String,
+    /// 已学习的 exe 完整路径（未运行时启动用；空 = 无路径、无法启动）
+    path: String,
     configured: bool,
 }
 
@@ -57,6 +59,8 @@ struct OverlayState {
     /// 本次运行生效的每页卡片数（前端按屏幕高度反推可行区间后下发）。
     /// 0 = 未下发，用 cfg.prog_page_size；不持久化，每次呼出重新协商
     eff_page_size: usize,
+    /// 本次选中要启动的程序路径（Effect::Launch 携带，驱动层取出执行后清空）
+    launch_path: Option<String>,
 }
 
 impl Default for OverlayState {
@@ -76,6 +80,7 @@ impl Default for OverlayState {
             digit_buf: String::new(),
             switched: false,
             eff_page_size: 0,
+            launch_path: None,
         }
     }
 }
@@ -251,6 +256,8 @@ enum Effect {
     Close,
     /// 轮询切换：驱动层立即在独立线程激活（不关闭覆盖层）
     ActivateWindow(isize),
+    /// 选中了未运行但可启动的程序（launch_path 已置）：驱动层启动它并关闭覆盖层
+    Launch,
 }
 
 impl OverlayState {
@@ -570,10 +577,21 @@ impl OverlayState {
         mru: &mut HashMap<isize, u64>,
         now: u64,
     ) -> Effect {
-        let wins = match self.wins_by_proc.get(&entry.process) {
-            Some(w) if !w.is_empty() => w,
-            _ => return Effect::None,
-        };
+        let has_wins = self
+            .wins_by_proc
+            .get(&entry.process)
+            .map(|w| !w.is_empty())
+            .unwrap_or(false);
+        if !has_wins {
+            // 未运行：开关打开且已配置、有可执行路径 → 启动它（选中即启动）；
+            // 否则保持旧行为（无动作，前端置灰不可选）
+            if cfg.launch_not_running && entry.configured && !entry.path.is_empty() {
+                self.launch_path = Some(entry.path.clone());
+                return Effect::Launch;
+            }
+            return Effect::None;
+        }
+        let wins = self.wins_by_proc.get(&entry.process).unwrap();
         if self.phase == Phase::Windows
             && self.sel_proc.as_deref() == Some(entry.process.as_str())
         {
@@ -723,6 +741,7 @@ fn build_prog_list(
             multi_key: p.multi_key.clone(),
             name: p.name.clone(),
             process: p.process.clone(),
+            path: p.path.clone(),
             configured: true,
         });
     }
@@ -764,6 +783,7 @@ fn build_prog_list(
             multi_key: String::new(),
             name,
             process: proc.clone(),
+            path: path.clone().unwrap_or_default(),
             configured: false,
         });
     }
@@ -1476,7 +1496,7 @@ fn refresh_overlay(app: AppHandle) {
 
 // 落地状态机产出的 Effect：Emit 重渲染、Close 收尾激活、ActivateWindow 轮询实时激活。
 // 调用方持有 ov 锁；Close 路径先 drop 再 close（close 会再取 overlay 锁）。
-fn apply_effect(app: &AppHandle, inner: &Inner, ov: std::sync::MutexGuard<'_, OverlayState>, eff: Effect) {
+fn apply_effect(app: &AppHandle, inner: &Inner, mut ov: std::sync::MutexGuard<'_, OverlayState>, eff: Effect) {
     match eff {
         Effect::None => {}
         Effect::Emit => emit(app, inner, &ov),
@@ -1487,6 +1507,17 @@ fn apply_effect(app: &AppHandle, inner: &Inner, ov: std::sync::MutexGuard<'_, Ov
         }
         Effect::Close => {
             drop(ov);
+            close(app);
+        }
+        Effect::Launch => {
+            let path = ov.launch_path.take();
+            drop(ov);
+            if let Some(p) = path {
+                match windows::launch_program(&p) {
+                    Ok(()) => eprintln!("[winhop] 启动未运行程序: {}", p),
+                    Err(e) => eprintln!("[winhop] 启动程序失败: {}（{}）", p, e),
+                }
+            }
             close(app);
         }
     }
@@ -1738,6 +1769,7 @@ mod state_machine_tests {
             multi_key: mk.into(),
             name: name.into(),
             process: proc_.into(),
+            path: String::new(),
             configured: true,
         }
     }
@@ -1781,6 +1813,49 @@ mod state_machine_tests {
         let e2 = entry("", "", "记事本", "notepad.exe");
         assert!(match_score(&e2, "记事本") > 0);
         assert!(match_score(&e2, "记事") > 0);
+    }
+
+    #[test]
+    fn launch_not_running_starts_configured_app_when_enabled() {
+        let mut e = entry("n", "", "Notepad", "notepad.exe");
+        e.path = r"C:\Windows\System32\notepad.exe".into();
+        let mut ov = state_with(vec![e]);
+        ov.phase = Phase::Programs;
+        let mut mru = HashMap::new();
+        let mut cfg = Config::default();
+        assert!(cfg.launch_not_running, "默认应开启选中即启动");
+        // 开关开：未运行且已配置有路径 → Launch，路径已置
+        let eff = ov.transition(&HookMsg::Enter, &cfg, &mut mru, 1, 0, &|_| false);
+        assert_eq!(eff, Effect::Launch);
+        assert_eq!(
+            ov.launch_path.as_deref(),
+            Some(r"C:\Windows\System32\notepad.exe")
+        );
+        // 开关关：不启动，路径不置
+        cfg.launch_not_running = false;
+        ov.launch_path = None;
+        let eff = ov.transition(&HookMsg::Enter, &cfg, &mut mru, 1, 0, &|_| false);
+        assert_eq!(eff, Effect::None);
+        assert!(ov.launch_path.is_none());
+    }
+
+    #[test]
+    fn launch_requires_path_and_configured_flag() {
+        let mut mru = HashMap::new();
+        let cfg = Config::default();
+        // 无路径（从未运行 / 未探测到）→ 不启动
+        let mut ov = state_with(vec![entry("n", "", "Notepad", "notepad.exe")]);
+        ov.phase = Phase::Programs;
+        let eff = ov.transition(&HookMsg::Enter, &cfg, &mut mru, 1, 0, &|_| false);
+        assert_eq!(eff, Effect::None);
+        // 未配置（自动发现的程序）→ 不启动
+        let mut e = entry("", "", "Auto", "auto.exe");
+        e.path = r"C:\auto.exe".into();
+        e.configured = false;
+        let mut ov2 = state_with(vec![e]);
+        ov2.phase = Phase::Programs;
+        let eff2 = ov2.transition(&HookMsg::Enter, &cfg, &mut mru, 1, 0, &|_| false);
+        assert_eq!(eff2, Effect::None);
     }
 
     #[test]
@@ -2028,6 +2103,7 @@ mod state_machine_tests {
             multi_key: "ch".into(),
             name: "Chrome".into(),
             process: "chrome.exe".into(),
+            path: String::new(),
             configured: true,
         }];
         ov.wins = wins.clone();

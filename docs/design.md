@@ -4,10 +4,10 @@
 
 ## 1. 定位
 
-Windows 窗口**快速切换器**，不是启动器：
+Windows 窗口**快速切换器**（启动是可选增强）：
 
 - 全局热键呼出全屏覆盖层，字母选程序、数字选窗口，纯键盘两次按键到任意窗口。
-- 只切换**运行中**的窗口；未运行程序灰色不可选，不负责启动。
+- 以切换**运行中**的窗口为主；`launch_not_running` 开启时（默认），已配置且记录过路径的未运行程序可选中直接启动（ShellExecute，见 §2 状态机 `Effect::Launch`）。
 - 仅面向 Windows 10/11 x64（macOS/Linux 已有更成熟方案，不做跨平台）。
 
 ## 2. 技术栈
@@ -28,7 +28,7 @@ WebView JS keydown ─invoke("key")─┘        (lib.rs)                       
 鼠标 WH_MOUSE_LL ─ClickOutside─┘
 ```
 
-- **状态机全在 Rust**（`src-tauri/src/lib.rs`）：`OverlayState`（阶段 `Closed/Programs/Windows`、程序列表、窗口列表、筛选缓冲、选中项、待激活 `pending`、MRU 等）。核心是**纯函数** `OverlayState::transition(msg, &cfg, &mut mru, now, overlay_hwnd, is_visible) -> Effect`——只改自身状态、返回 `Effect{None,Emit,Close,ActivateWindow}`，不碰 Tauri/锁，可直接单测。薄驱动 `handle_key`/`pick_program` 拿锁、clone 一份 cfg 快照调 transition，再由 `apply_effect` 落地（emit/close/轮询激活）。前端只渲染 `Render` 结构、回传按键/点击。
+- **状态机全在 Rust**（`src-tauri/src/lib.rs`）：`OverlayState`（阶段 `Closed/Programs/Windows`、程序列表、窗口列表、筛选缓冲、选中项、待激活 `pending`、MRU 等）。核心是**纯函数** `OverlayState::transition(msg, &cfg, &mut mru, now, overlay_hwnd, is_visible) -> Effect`——只改自身状态、返回 `Effect{None,Emit,Close,ActivateWindow,Launch}`（`Launch` = 选中已配置但未运行的程序时，经 `launch_path` 交给驱动层 ShellExecute 启动并关闭覆盖层），不碰 Tauri/锁，可直接单测。薄驱动 `handle_key`/`pick_program` 拿锁、clone 一份 cfg 快照调 transition，再由 `apply_effect` 落地（emit/close/轮询激活/启动程序）。前端只渲染 `Render` 结构、回传按键/点击。
 - **Win32 层**（`src-tauri/src/windows.rs`）：窗口枚举、激活、鼠标钩子、DWM 缩略图、语言/提权/单实例/自启注册表/日志/`open_url`（默认浏览器打开链接，限 `https://`；设置页关于区 GitHub 仓库引导）。
 - **配置层**（`src-tauri/src/config.rs`）：`config.json` 加载、迁移、校验、原子保存。
 - **设置页**（`src-tauri/src/settings.rs`）：`get_settings`/`save_settings` 命令、设置 DTO、changelog、热键注册与自启副作用；**热键录制**（`src-tauri/src/hotkey_capture.rs`）：`GetAsyncKeyState` 轮询检测组合键（绕开 IME 吞事件），自包含不依赖状态机；**检查更新**（`src-tauri/src/update.rs`）：`check_update` 命令查询 GitHub Releases API（`releases/latest`，ureq 10s 超时，尊重代理环境变量），语义化版本比较（容忍 v 前缀与 -beta/+build 后缀）后返回 `{current, latest, has_update, url}`；设置页打开时静默自动检查一次（失败不打扰）+ 手动按钮，发现新版时状态行变为可点击链接打开发布页（`open_url`，浏览器自行处理代理），不做应用内下载/安装。关于区信息架构：版本行（`WinHop X.Y.Z · 日期` + 检查按钮）→ 状态行 → GitHub 文字链接 → 更新记录（版本号只在版本行出现一次）。
@@ -168,6 +168,7 @@ MRU 在经 WinHop 切换、呼出时记录前台、以及看门狗线程检测�
   "prog_page_size": 20,
   "overlay_bg": "solid",
   "close_anim": true,
+  "launch_not_running": true,
   "lang": "",
   "programs": [
     { "key": "c", "multi_key": "ch", "name": "Chrome", "process": "chrome.exe" }
@@ -189,6 +190,7 @@ MRU 在经 WinHop 切换、呼出时记录前台、以及看门狗线程检测�
 | `prog_page_size` | 每页卡片数**偏好**，8–64，默认 20；实际生效值由前端按屏幕钳制后经 `set_page_size` 下发（仅运行时，不持久化），Rust 分页与前端缩放共用生效值 |
 | `overlay_bg` | 覆盖层背景效果：`solid`（默认，纯不透明暗色）/ `acrylic`（系统级毛玻璃模糊，Win10 1809+ 走 `SetWindowCompositionAttribute` ACCENT_ENABLE_ACRYLICBLURBEHIND，Win11 走 `DWMWA_SYSTEMBACKDROP_TYPE`）。非 acrylic 模式无窗口特效、纯 CSS；切换即时生效（`set_overlay_bg` 命令，预览/保存/回退共用）。曾有三档半透明 `translucent`（桌面透出显得杂乱）已移除，老配置值经 parse 归入 solid |
 | `close_anim` | **退出类关闭**（Esc/点击外部/再按热键）是否 ~200ms 柔和淡出（默认 true）；切换类关闭（Space/数字/回车/跳转）与焦点丢失路径始终瞬时；淡出的激活在动画结束回执后（`overlay_hidden` → hide+激活）——淡出期提前激活会析出「可见但已失焦」伪影；false=全部瞬时 |
+| `launch_not_running` | 已配置但未运行的程序：选中（回车/字母/点击）时是否直接启动（默认 true）。仅当程序 `configured=true` 且配置里有学习到的 `path`（非空）时生效；启动走 `ShellExecuteW "open"`（只接受 `.exe`），成功后关闭覆盖层。false=旧行为（置灰不可选） |
 | `lang` | 界面语言：空=跟随系统，`zh-CN` / `en` |
 | `programs[]` | `key` 单字母代号（单小写字母，可空）、`multi_key` 多字母代号（全小写，可空）、`name` 显示名、`process` 小写 exe 名；`key`/`multi_key` 各自唯一。`path` 为自动学习的 exe 完整路径（供未运行时提取图标，编辑面板不展示） |
 | `blocked[]` | 黑名单，兼容裸字符串或 `{process,note}`；进程名小写 |

@@ -150,6 +150,10 @@ pub struct Config {
     /// 关闭后 overlay_hidden 收尾 hide。false=全部瞬时
     #[serde(default = "default_true")]
     pub close_anim: bool,
+    /// 已配置但未运行的程序：选中（回车/字母/点击）时是否直接启动它。
+    /// true（默认）= 选中即启动；false = 仅切换（未运行项不可选，旧行为）
+    #[serde(default = "default_true")]
+    pub launch_not_running: bool,
     /// 用户偏好的每页卡片数（设置页 8–64 可填）。实际生效页长由前端按屏幕高度
     /// 反推可行区间后钳制（set_page_size，仅本次运行不持久化），保证卡片缩放
     /// 始终在 0.75–1.35 内且铺满屏幕
@@ -227,7 +231,7 @@ fn default_prog_page_size() -> usize {
     20
 }
 
-fn default_true() -> bool {
+pub(crate) fn default_true() -> bool {
     true
 }
 
@@ -250,6 +254,7 @@ impl Default for Config {
             lang: String::new(),
             overlay_bg: OverlayBg::default(),
             close_anim: true,
+            launch_not_running: true,
             prog_page_size: default_prog_page_size(),
             programs: Vec::new(),
             blocked: Vec::new(),

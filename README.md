@@ -27,7 +27,7 @@ Four scenarios in action: single-letter and multi-letter modes over single-windo
 ## Why WinHop
 
 - **Keyboard-only, two keystrokes to any window**: `Ctrl+Space` to open, a letter for the program, a digit for the window. Hands stay on the keyboard.
-- **Switching only, not a launcher**: the list is what you see. Running programs are reached directly by their code; non-running ones are greyed out and not selectable. No extra clutter.
+- **Switching first, launching when asked**: the list is what you see. Running programs are reached directly by their code; configured but not-running programs can be launched by selecting them (on by default, switchable in Settings).
 - **A two-layer model that keeps you oriented**: program layer then window layer, where multi-window programs show thumbnails plus a large preview.
 - **Codes you can read at a glance**: solid bright badge = configured and running, a `·` placeholder = no letter assigned (click to pick, use ✎ to assign one), grey = configured but not running.
 - **Lightweight and resident**: lives in the tray, single instance; runs elevated so it can switch admin windows like Task Manager.
@@ -42,6 +42,7 @@ Four scenarios in action: single-letter and multi-letter modes over single-windo
 - **Space to jump back**: press Space right after opening to switch to the previously used window (toggle between your two most recent).
 - **Pagination**: 20 programs per page, `PageUp/PageDown` to page.
 - **Window layer**: number + thumbnail + large preview, arrow keys/hover linked, auto-scroll follows the selection.
+- **Launch not-running apps**: configured programs with a known path open when selected (Enter / click) — no need to hunt for the icon (switchable in Settings).
 - **Unified editing**: every program (configured or not) can be renamed and assigned a code; writes to `config.json` and takes effect immediately.
 - **Sorting options**: fixed order (by creation) / most-recently-used first.
 - **Multi-monitor**: entries show which screen a window is on; after switching, the window stays on its original screen.
@@ -79,7 +80,7 @@ Ctrl+Space (default hotkey, configurable)
   → press the hotkey again / click outside the picker → close
 ```
 
-- Non-running programs are shown greyed out at the end and are not selectable (switcher, not launcher).
+- Non-running programs are shown greyed out at the end; with "Launch on select" enabled in Settings, configured apps with a known path can be opened directly.
 - Running unconfigured programs are still listed with a `·` placeholder: they're clickable to switch, but no letter is auto-assigned (assign one manually with ✎; clearing the letter and saving unbinds it).
 - Each window-layer row: number + title + screen tag + small thumbnail; the large preview on the right follows selection/hover.
 

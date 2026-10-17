@@ -134,6 +134,19 @@
           </div>
 
           <div class="setting-section">
+            <div class="setting-group-title" data-i18n="setLaunchOff">未运行的程序</div>
+            <label class="setting-row">
+              <input type="radio" name="launch-off" value="on" checked />
+              <span data-i18n="launchOn">选中即启动：已配置但未运行的程序，回车或点击直接打开</span>
+            </label>
+            <label class="setting-row">
+              <input type="radio" name="launch-off" value="off" />
+              <span data-i18n="launchOff">仅切换：未运行的程序置灰，不可选中</span>
+            </label>
+            <div class="pagesize-hint" data-i18n="launchHint">启动仅对已配置且记录过路径的程序生效（运行过一次即记住路径，也可从注册表 / 开始菜单解析）；没有路径的仍置灰不可选</div>
+          </div>
+
+          <div class="setting-section">
             <div class="setting-group-title" data-i18n="setBlocked">黑名单（已屏蔽的程序）</div>
             <div id="blocked-list" class="blocked-list"></div>
           </div>

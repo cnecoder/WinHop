@@ -56,6 +56,8 @@ pub(crate) struct SettingsInfo {
     overlay_bg: String,
     /// 退出类关闭是否淡出（切换类关闭始终瞬时）
     close_anim: bool,
+    /// 已配置但未运行的程序：选中时是否直接启动
+    launch_not_running: bool,
     /// 当前生效语言（cfg.lang 为空则取系统检测值）
     lang: String,
     /// 配置里保存的语言（空=跟随系统；用于区分"明确选了 zh-CN"与"跟随系统恰好是中文"）
@@ -103,6 +105,7 @@ pub(crate) fn get_settings(app: AppHandle) -> SettingsInfo {
         prog_page_size: cfg.prog_page_size,
         overlay_bg: cfg.overlay_bg.as_str().into(),
         close_anim: cfg.close_anim,
+        launch_not_running: cfg.launch_not_running,
         // 当前生效语言：配置指定优先，空则跟随系统
         lang: if cfg.lang.is_empty() {
             windows::system_lang().to_string()
@@ -149,6 +152,9 @@ pub(crate) struct SettingsInput {
     /// 退出类关闭淡出开关
     #[serde(default)]
     pub(crate) close_anim: bool,
+    /// 已配置但未运行的程序：选中时是否直接启动
+    #[serde(default = "crate::config::default_true")]
+    pub(crate) launch_not_running: bool,
     /// 界面语言（"zh-CN"/"en"；空串=跟随系统，由前端传 system 表达）
     #[serde(default)]
     pub(crate) lang: String,
@@ -252,6 +258,7 @@ pub(crate) fn save_settings(app: AppHandle, input: SettingsInput) -> Result<(), 
         cfg.win_digit_mode = win_digit_mode;
         cfg.overlay_bg = overlay_bg;
         cfg.close_anim = input.close_anim;
+        cfg.launch_not_running = input.launch_not_running;
         cfg.prog_page_size = prog_page_size;
         cfg.lang = lang;
         if new_sc.is_some() {
