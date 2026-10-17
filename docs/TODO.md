@@ -28,7 +28,8 @@
 - [x] **`hotkey_capture_start` 防重复线程**：连续调用会 spawn 多个轮询线程（30ms 轮询窗口内旧线程未退出即重复）——加代际号（generation），旧线程按代际退出；前端 `startHotkeyCapture` 加 `hkListening` 防重入（原实现重复点击还会叠加 poll 定时器）
 - [x] **`close_impl` 合并两次 cfg 锁**：算 `anim_ms` 与构造 `Render::closed` 各取一次锁，合并为一次（消除两锁之间配置变化的理论窗口）
 - [x] **`config::validate` 非法代号不再无提示闪退**：`validate` 改返回 `Result`，`read_cfg` 汇成带路径与原因的 panic；`run()` 开头装 panic hook，弹原生错误窗（`MessageBoxW`，release 无控制台/webview 未建立时的唯一可见出口），文案含错误详情、配置文件位置与删除重建指引（覆盖 JSON 解析失败等一切启动期 panic）
-- [ ] **`activate()` 的 `SPIF_SENDCHANGE`**（待实测）：前后两次 `SPI_SETFOREGROUNDLOCKTIMEOUT` 均带该标志，每次切换全局广播两次 `WM_SETTINGCHANGE`；多数实现不带也能生效，需实机验证激活行为后决定是否去掉
+- [x] **`activate()` 的 `SPIF_SENDCHANGE` 已去除**（2026-10-17 改并实测通过）：两处 `SPI_SETFOREGROUNDLOCKTIMEOUT` 改传 0（只改会话内存值）——省掉每次窗口切换的两次注册表写入与两轮全局 `WM_SETTINGCHANGE` 广播（AHK/PowerToys 同款做法）。实测覆盖：常规切换、最小化还原、数字跳转、Space 互切、轮询切换、Esc 回退，激活均正常。
+  - **残余风险（挂账）**：① 微软文档未明确保证 `SPI_SETFOREGROUNDLOCKTIMEOUT` 在不带 `SPIF_UPDATEINIFILE` 时于**所有** Windows 版本/环境生效——仅在 Win10 22H2（acrylic 同机）实测；② 未覆盖场景：远程桌面会话、组策略强制前台锁定、未来 Windows 行为变更。若某环境出现「切不过去/任务栏闪烁」，回滚为一行（两处 `0` → `SPIF_SENDCHANGE`，并恢复 import），回归成本极低。
 - [~] **`match_score`/`view_indices` 每键重复计算**（评估后不做）：每次按键对每条目 to_lowercase ×3 + 全量排序；程序数 <100 时开销微秒级，预计算增加 `ProgEntry` 字段与维护成本，不值——真出现性能问题再按呼出时缓存小写副本处理
 
 ## 已完成（历史记录）

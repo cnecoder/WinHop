@@ -49,7 +49,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetWindowThreadProcessId, ICONINFO, IsIconic, IsWindow, IsWindowVisible, MSLLHOOKSTRUCT,
     SetForegroundWindow, SetWindowsHookExW, WS_EX_TOOLWINDOW, GWL_EXSTYLE,
     ShowWindow, SM_CYCAPTION, SM_CXPADDEDBORDER, SM_CXSIZEFRAME, SM_CYSIZEFRAME,
-    SPIF_SENDCHANGE, SPI_GETFOREGROUNDLOCKTIMEOUT, SPI_SETFOREGROUNDLOCKTIMEOUT,
+    SPI_GETFOREGROUNDLOCKTIMEOUT, SPI_SETFOREGROUNDLOCKTIMEOUT,
     SystemParametersInfoW, SW_RESTORE, WINDOWPLACEMENT, WM_LBUTTONDOWN, WM_MBUTTONDOWN,
     WM_RBUTTONDOWN, WH_MOUSE_LL, WPF_RESTORETOMAXIMIZED,
 };
@@ -1077,11 +1077,17 @@ pub fn activate(hwnd: isize) -> bool {
             &mut timeout as *mut u32 as *mut c_void,
             0,
         );
+        // fWinIni 传 0（不带 SPIF_UPDATEINIFILE | SPIF_SENDCHANGE）：前台锁超时只需在
+        // SetForegroundWindow 瞬间生效于会话内存值——持久化写注册表 + 两轮全局
+        // WM_SETTINGCHANGE 广播（每窗口切换各两次）对目标无意义，纯增开销；
+        // AHK/PowerToys 同类激活方案同样不带。实测 Win10 22H2 多场景（常规/最小化
+        // 还原/数字跳转/Space 互切/轮询/Esc 回退）激活正常；残余风险（远程会话、
+        // 组策略强制前台锁定、未来版本行为变更）挂账见 docs/TODO.md，回归为一行改动。
         SystemParametersInfoW(
             SPI_SETFOREGROUNDLOCKTIMEOUT,
             0,
             &0u32 as *const u32 as *mut c_void,
-            SPIF_SENDCHANGE,
+            0,
         );
         let ok = SetForegroundWindow(h);
         BringWindowToTop(h);
@@ -1090,7 +1096,7 @@ pub fn activate(hwnd: isize) -> bool {
             SPI_SETFOREGROUNDLOCKTIMEOUT,
             0,
             &timeout as *const u32 as *mut c_void,
-            SPIF_SENDCHANGE,
+            0,
         );
         let success = ok != 0 && GetForegroundWindow() == h;
         if !success {
